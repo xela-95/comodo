@@ -3,9 +3,12 @@ import numpy.typing as npt
 from comodo.abstractClasses.simulator import Simulator
 from jaxsim.high_level.common import VelRepr
 from jaxsim.high_level.model import Model
+from jaxsim.simulation.ode import compute_contact_forces
+from jaxsim.simulation.ode_data import ODEState
 from typing import Union
 import jax.numpy as jnp
 import logging
+from meshcat_viz.world import MeshcatWorld
 
 
 class JaxsimSimulator(Simulator):
@@ -21,7 +24,8 @@ class JaxsimSimulator(Simulator):
         Im=None,
     ) -> None:
         logging.warning("Motor parameters are not supported in JaxsimSimulator")
-
+        logging.warning("Defaulting to ground parameters: K=1e6, D=2e3, mu=0.5")
+        xyz_rpy[2] = xyz_rpy[2] + 0.005
         self.model = Model.build_from_model_description(
             model_description=robot_model.urdf_string,
             model_name=robot_model.robot_name,
@@ -35,7 +39,30 @@ class JaxsimSimulator(Simulator):
         )
 
         self.model.reset_joint_positions(positions=s)
-        self.dt = 0.001
+        self.dt = 0.0001
+
+        if False:
+            self.renderer = MeshcatWorld()
+            self.renderer.insert_model(
+                model_description=robot_model.urdf_string,
+                is_urdf=True,
+                model_name=robot_model.robot_name,
+            )
+            self.renderer._visualizer.jupyter_cell()
+
+    def get_contact_wrenches(self) -> npt.ArrayLike:
+        x0 = ODEState(
+            physics_model=self.model.data.model_state,
+            soft_contacts=self.model.data.contact_state,
+        )
+
+        (
+            contact_forces_links,
+            tangential_deformation_dot,
+            contact_forces_points,
+        ) = compute_contact_forces(physics_model=self.model.physics_model, ode_state=x0)
+
+        return np.array(contact_forces_links)
 
     def set_input(self, input: npt.ArrayLike) -> None:
         self.model.set_joint_generalized_force_targets(jnp.array(input))
@@ -73,3 +100,12 @@ class JaxsimSimulator(Simulator):
         qz = cr * cp * sy - sr * sp * cy
 
         return [qw, qx, qy, qz]
+
+    def render(self):
+        self.renderer.update_model(
+            model_name=self.model.name,
+            joint_positions=self.model.joint_positions(),
+            joint_names=self.model.joint_names(),
+            base_position=self.model.base_position(),
+            base_quaternion=self.model.base_orientation(),
+        )
