@@ -1,0 +1,3 @@
+Fri Jan 26 16:16:18 2024
+WARNING: Inertia matrix is too close to singular at DOF 21. Check model. Time = 0.0000.
+
