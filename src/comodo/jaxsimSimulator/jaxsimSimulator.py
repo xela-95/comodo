@@ -5,10 +5,13 @@ from jaxsim.high_level.common import VelRepr
 from jaxsim.high_level.model import Model
 from jaxsim.simulation.ode import compute_contact_forces
 from jaxsim.simulation.ode_data import ODEState
+from jaxsim.simulation.ode_integration import IntegratorType
+from jaxsim.physics.algos.soft_contacts import SoftContactsParams
 from typing import Union
 import jax.numpy as jnp
 import logging
 from meshcat_viz.world import MeshcatWorld
+import jax
 
 
 class JaxsimSimulator(Simulator):
@@ -39,7 +42,7 @@ class JaxsimSimulator(Simulator):
         )
 
         self.model.reset_joint_positions(positions=s)
-        self.dt = 0.0001
+        self.dt = 1e-4
 
         if False:
             self.renderer = MeshcatWorld()
@@ -50,25 +53,28 @@ class JaxsimSimulator(Simulator):
             )
             self.renderer._visualizer.jupyter_cell()
 
-    def get_contact_wrenches(self) -> npt.ArrayLike:
-        x0 = ODEState(
-            physics_model=self.model.data.model_state,
-            soft_contacts=self.model.data.contact_state,
-        )
+    def get_feet_wrench(self) -> npt.ArrayLike:
+        wrenches = self.data.aux["tf"]["contact_forces_links"]
 
-        (
-            contact_forces_links,
-            tangential_deformation_dot,
-            contact_forces_points,
-        ) = compute_contact_forces(physics_model=self.model.physics_model, ode_state=x0)
-
-        return np.array(contact_forces_links)
+        left_foot = np.array(wrenches[-2])
+        right_foot = np.array(wrenches[-1])
+        return left_foot, right_foot
 
     def set_input(self, input: npt.ArrayLike) -> None:
         self.model.set_joint_generalized_force_targets(jnp.array(input))
 
     def step(self, n_step: int = 1) -> None:
-        self.model.integrate(t0=0, tf=n_step * self.dt, sub_steps=1)
+        self.data = self.model.integrate(
+            t0=0,
+            tf=n_step * self.dt,
+            sub_steps=1,
+            # integrator_type=IntegratorType.RungeKutta4,
+            contact_parameters=SoftContactsParams(
+                K=jnp.array(1e5, dtype=float),
+                D=jnp.array(4e3, dtype=float),
+                mu=jnp.array(0.5, dtype=float),
+            ),
+        )
 
     def get_base(self) -> npt.ArrayLike:
         return np.array(self.model.base_transform())
