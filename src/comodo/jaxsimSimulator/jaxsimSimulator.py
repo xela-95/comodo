@@ -1,17 +1,22 @@
+import logging
+from typing import Union
+
+import jax
+import jax.numpy as jnp
+import jaxsim.api as js
 import numpy as np
 import numpy.typing as npt
 from comodo.abstractClasses.simulator import Simulator
+from jaxsim import VelRepr, integrators
 from jaxsim.high_level.common import VelRepr
 from jaxsim.high_level.model import Model
+from jaxsim.physics.algos.soft_contacts import SoftContactsParams
 from jaxsim.simulation.ode import compute_contact_forces
 from jaxsim.simulation.ode_data import ODEState
 from jaxsim.simulation.ode_integration import IntegratorType
-from jaxsim.physics.algos.soft_contacts import SoftContactsParams
-from typing import Union
-import jax.numpy as jnp
-import logging
-from meshcat_viz.world import MeshcatWorld
-import jax
+from jaxsim import sixd
+
+# from meshcat_viz.world import MeshcatWorld
 
 
 class JaxsimSimulator(Simulator):
@@ -29,20 +34,43 @@ class JaxsimSimulator(Simulator):
         logging.warning("Motor parameters are not supported in JaxsimSimulator")
         logging.warning("Defaulting to ground parameters: K=1e6, D=2e3, mu=0.5")
         xyz_rpy[2] = xyz_rpy[2] + 0.005
-        self.model = Model.build_from_model_description(
+        model = js.model.JaxSimModel.build_from_model_description(
             model_description=robot_model.urdf_string,
             model_name=robot_model.robot_name,
-            vel_repr=VelRepr.Mixed,
             is_urdf=True,
         )
-        self.model.reduce(considered_joints=robot_model.joint_name_list)
-        self.model.reset_base_position(position=jnp.array(xyz_rpy[:3]))
-        self.model.reset_base_orientation(
-            orientation=jnp.array(self.RPY_to_quat(*xyz_rpy[3:]))
+        self.model = js.model.reduce(
+            model=model, considered_joints=robot_model.joint_name_list
         )
 
-        self.model.reset_joint_positions(positions=s)
+        data0 = js.data.JaxSimModelData.build(
+            model=self.model,
+            velocity_representation=VelRepr.Inertial,
+            base_position=jnp.array(xyz_rpy[:3]),
+            base_quaternion=jnp.array(self.RPY_to_quat(*xyz_rpy[3:])),
+            joint_positions=jnp.array(s),
+        )
+
+        self.data = data0.replace(
+            soft_contacts_params=js.contact.estimate_good_soft_contacts_parameters(
+                model, number_of_active_collidable_points_steady_state=2
+            ),
+        )
+
+        self.integrator = integrators.fixed_step.RungeKutta4SO3.build(
+            dynamics=js.ode.wrap_system_dynamics_for_integration(
+                model=self.model,
+                data=self.data,
+                system_dynamics=js.ode.system_dynamics,
+            ),
+        )
+
         self.dt = 1e-4
+        self.tau = jnp.zeros(20)
+
+        self.integrator_state = self.integrator.init(
+            x0=self.data.state, t0=0, dt=self.dt
+        )
 
         if False:
             self.renderer = MeshcatWorld()
@@ -61,33 +89,56 @@ class JaxsimSimulator(Simulator):
         return left_foot, right_foot
 
     def set_input(self, input: npt.ArrayLike) -> None:
-        self.model.set_joint_generalized_force_targets(jnp.array(input))
+        self.tau = jnp.array(input)
 
-    def step(self, n_step: int = 1) -> None:
-        self.data = self.model.integrate(
-            t0=0,
-            tf=n_step * self.dt,
-            sub_steps=1,
-            # integrator_type=IntegratorType.RungeKutta4,
-            contact_parameters=SoftContactsParams(
-                K=jnp.array(1e5, dtype=float),
-                D=jnp.array(4e3, dtype=float),
-                mu=jnp.array(0.5, dtype=float),
-            ),
+    def step(
+        self, n_step: int = 1, terrain_parameters: tuple[float, float, float] = None
+    ) -> None:
+        if terrain_parameters is not None:
+            K, D, mu = terrain_parameters
+        self.data, self.integrator_state = js.model.step(
+            dt=self.dt,
+            model=self.model,
+            data=self.data,
+            integrator=self.integrator,
+            integrator_state=self.integrator_state,
+            joint_forces=self.tau,
         )
 
     def get_base(self) -> npt.ArrayLike:
-        return np.array(self.model.base_transform())
+        base_position = np.vstack(self.data.state.physics_model.base_position)
+
+        base_unit_quaternion = (
+            self.data.state.physics_model.base_quaternion.squeeze()
+            / jnp.linalg.norm(self.data.state.physics_model.base_quaternion)
+        )
+
+        # wxyz -> xyzw
+        to_xyzw = np.array([1, 2, 3, 0])
+
+        base_orientation = sixd.so3.SO3.from_quaternion_xyzw(
+            base_unit_quaternion[to_xyzw]
+        ).as_matrix()
+
+        return np.vstack(
+            [
+                np.block([base_orientation, base_position]),
+                np.array([0, 0, 0, 1]),
+            ]
+        )
 
     def get_base_velocity(self) -> npt.ArrayLike:
-        return np.array(self.model.base_velocity())
+        return np.array(self.data.base_velocity())
 
     def get_state(self) -> Union[npt.ArrayLike, npt.ArrayLike, npt.ArrayLike]:
-        s = np.array(self.model.joint_positions())
-        s_dot = np.array(self.model.joint_velocities())
-        tau = np.array(self.model.data.model_input.tau)
+        s = np.array(self.data.state.physics_model.joint_positions)
+        s_dot = np.array(self.data.state.physics_model.joint_velocities)
+        tau = np.array(self.tau)
 
         return s, s_dot, tau
+
+    def total_mass(self) -> float:
+        return js.model.total_mass(self.model)
 
     def close(self) -> None:
         pass
