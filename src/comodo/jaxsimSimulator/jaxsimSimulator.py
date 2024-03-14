@@ -1,27 +1,25 @@
 import logging
 from typing import Union
 
-import jax
 import jax.numpy as jnp
 import jaxsim.api as js
 import numpy as np
 import numpy.typing as npt
 from comodo.abstractClasses.simulator import Simulator
 from jaxsim import VelRepr, integrators
-from jaxsim.high_level.common import VelRepr
-from jaxsim.high_level.model import Model
-from jaxsim.physics.algos.soft_contacts import SoftContactsParams
-from jaxsim.simulation.ode import compute_contact_forces
-from jaxsim.simulation.ode_data import ODEState
-from jaxsim.simulation.ode_integration import IntegratorType
 from jaxsim import sixd
-
-# from meshcat_viz.world import MeshcatWorld
+from jaxsim.mujoco.visualizer import MujocoVisualizer
+from jaxsim.mujoco.model import MujocoModelHelper
+from jaxsim.mujoco.loaders import UrdfToMjcf
 
 
 class JaxsimSimulator(Simulator):
+
     def __init__(self) -> None:
-        super().__init__()
+        self.dt = 1e-3
+        self.tau = jnp.zeros(20)
+        self.visualize_robot_flag = None
+        self.viz = None
 
     def load_model(
         self,
@@ -32,19 +30,18 @@ class JaxsimSimulator(Simulator):
         Im=None,
     ) -> None:
         logging.warning("Motor parameters are not supported in JaxsimSimulator")
-        logging.warning("Defaulting to ground parameters: K=1e6, D=2e3, mu=0.5")
-        xyz_rpy[2] = xyz_rpy[2] + 0.005
+        xyz_rpy[2] = xyz_rpy[2] + 0.0005
         model = js.model.JaxSimModel.build_from_model_description(
             model_description=robot_model.urdf_string,
             model_name=robot_model.robot_name,
             is_urdf=True,
         )
-        self.model = js.model.reduce(
+        model = js.model.reduce(
             model=model, considered_joints=robot_model.joint_name_list
         )
 
         data0 = js.data.JaxSimModelData.build(
-            model=self.model,
+            model=model,
             velocity_representation=VelRepr.Inertial,
             base_position=jnp.array(xyz_rpy[:3]),
             base_quaternion=jnp.array(self.RPY_to_quat(*xyz_rpy[3:])),
@@ -57,29 +54,23 @@ class JaxsimSimulator(Simulator):
             ),
         )
 
+        logging.warning(
+            f"Defaulting to optimized ground parameters: {self.data.soft_contacts_params}"
+        )
+
         self.integrator = integrators.fixed_step.RungeKutta4SO3.build(
             dynamics=js.ode.wrap_system_dynamics_for_integration(
-                model=self.model,
+                model=model,
                 data=self.data,
                 system_dynamics=js.ode.system_dynamics,
             ),
         )
 
-        self.dt = 1e-4
-        self.tau = jnp.zeros(20)
-
         self.integrator_state = self.integrator.init(
             x0=self.data.state, t0=0, dt=self.dt
         )
 
-        if False:
-            self.renderer = MeshcatWorld()
-            self.renderer.insert_model(
-                model_description=robot_model.urdf_string,
-                is_urdf=True,
-                model_name=robot_model.robot_name,
-            )
-            self.renderer._visualizer.jupyter_cell()
+        self.model = model
 
     def get_feet_wrench(self) -> npt.ArrayLike:
         wrenches = self.data.aux["tf"]["contact_forces_links"]
@@ -91,19 +82,22 @@ class JaxsimSimulator(Simulator):
     def set_input(self, input: npt.ArrayLike) -> None:
         self.tau = jnp.array(input)
 
-    def step(
-        self, n_step: int = 1, terrain_parameters: tuple[float, float, float] = None
-    ) -> None:
-        if terrain_parameters is not None:
-            K, D, mu = terrain_parameters
+    def step(self, torque: np.ndarray = None, n_step: int = 1) -> None:
+
+        if torque is None:
+            torque = np.zeros(20)
+
         self.data, self.integrator_state = js.model.step(
             dt=self.dt,
             model=self.model,
             data=self.data,
             integrator=self.integrator,
             integrator_state=self.integrator_state,
-            joint_forces=self.tau,
+            joint_forces=torque,
         )
+
+        if self.visualize_robot_flag:
+            self.render()
 
     def get_base(self) -> npt.ArrayLike:
         base_position = np.vstack(self.data.state.physics_model.base_position)
@@ -130,9 +124,12 @@ class JaxsimSimulator(Simulator):
     def get_base_velocity(self) -> npt.ArrayLike:
         return np.array(self.data.base_velocity())
 
+    def get_simulation_time(self) -> float:
+        return self.data.time()
+
     def get_state(self) -> Union[npt.ArrayLike, npt.ArrayLike, npt.ArrayLike]:
-        s = np.array(self.data.state.physics_model.joint_positions)
-        s_dot = np.array(self.data.state.physics_model.joint_velocities)
+        s = np.array(self.data.joint_positions())
+        s_dot = np.array(self.data.joint_velocities())
         tau = np.array(self.tau)
 
         return s, s_dot, tau
@@ -159,10 +156,28 @@ class JaxsimSimulator(Simulator):
         return [qw, qx, qy, qz]
 
     def render(self):
-        self.renderer.update_model(
-            model_name=self.model.name,
-            joint_positions=self.model.joint_positions(),
-            joint_names=self.model.joint_names(),
-            base_position=self.model.base_position(),
-            base_quaternion=self.model.base_orientation(),
+        if not self.viz:
+            mjcf_string, assets = UrdfToMjcf.convert(
+                urdf=self.model.built_from,
+            )
+
+            self.mj_model_helper = MujocoModelHelper.build_from_xml(
+                mjcf_description=mjcf_string, assets=assets
+            )
+
+            self.viz = MujocoVisualizer(
+                model=self.mj_model_helper.model, data=self.mj_model_helper.data
+            )
+            self._handle = self.viz.open_viewer()
+
+        self.mj_model_helper.set_base_position(
+            position=self.data.base_position(),
         )
+        self.mj_model_helper.set_base_orientation(
+            orientation=self.data.base_orientation(),
+        )
+        self.mj_model_helper.set_joint_positions(
+            positions=self.data.joint_positions(),
+            joint_names=self.model.joint_names(),
+        )
+        self.viz.sync(viewer=self._handle)
