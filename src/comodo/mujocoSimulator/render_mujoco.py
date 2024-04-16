@@ -2,6 +2,7 @@ import mujoco
 import math
 import numpy as np
 import mujoco_viewer
+import jaxsim
 
 
 class MujocoVisualizer:

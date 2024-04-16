@@ -457,6 +457,45 @@ class TSIDController(Controller):
         # self.left_foot_regularization_task.set_set_point(wrench_desired_left)
         # self.right_foot_regularization_task.set_set_point(wrench_desired_right)
 
+    def update_task_references_mpc_balancing(
+        self,
+        com,
+        dcom,
+        ddcom,
+        left_foot_desired,
+        right_foot_desired,
+        s_desired,
+        wrenches_left,
+        wrenches_right,
+    ):
+
+        self.CoM_Task.set_set_point(com, dcom, ddcom)
+        self.left_foot_tracking_task.set_set_point(
+            left_foot_desired,
+            manifpy.SE3Tangent(np.zeros(6)),
+            manifpy.SE3Tangent(np.zeros(6)),
+        )
+        self.right_foot_tracking_task.set_set_point(
+            right_foot_desired,
+            manifpy.SE3Tangent(np.zeros(6)),
+            manifpy.SE3Tangent(np.zeros(6)),
+        )
+        self.update_contacts(
+            left_contact=True,
+            right_contact=True,
+        )
+        self.joint_regularization_task.set_set_point(s_desired)
+        # self.angular_momentum_task.set_set_point(np.zeros(3), np.zeros(3))
+        wrench_desired_left = np.zeros(6)
+        wrench_desired_right = np.zeros(6)
+        # mass = self.robot_model.get_total_mass()
+        # wrench_desired[2] = -(mass*9.81/2)
+        # wrench_desiredp[]
+        wrench_desired_left[:3] = wrenches_left
+        wrench_desired_right[:3] = wrenches_right
+        # self.left_foot_regularization_task.set_set_point(wrench_desired_left)
+        # self.right_foot_regularization_task.set_set_point(wrench_desired_right)
+
     def update_com_task(self):
 
         angle = 0.2 * self.t
