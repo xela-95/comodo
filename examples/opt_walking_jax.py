@@ -12,8 +12,10 @@ import xml.etree.ElementTree as ET
 import numpy as np
 import tempfile
 import urllib.request
-
+import jax.numpy as jnp
 import os
+from rich import logging
+import jax
 
 
 def plot_study(study: optuna.Study):
@@ -40,9 +42,10 @@ def plot_study(study: optuna.Study):
     )
 
 
-def init(TERRAIN_PARAMETERS):
+def init():
 
-    terrain_params = dict(zip(["K", "D", "mu"], TERRAIN_PARAMETERS))
+    jax.config.update("jax_platform_name", "cpu")
+
     # Getting stickbot urdf file and convert it to string
     urdf_robot_file = tempfile.NamedTemporaryFile(mode="w+")
     url = "https://raw.githubusercontent.com/icub-tech-iit/ergocub-gazebo-simulations/master/models/stickBot/model.urdf"
@@ -95,11 +98,32 @@ def init(TERRAIN_PARAMETERS):
 
     # Define simulator and set initial position
     jax_instance = JaxsimSimulator()
-    jax_instance.load_model(
-        robot_model_init, s=s_des, xyz_rpy=xyz_rpy, terrain_params=terrain_params
+    jax_instance.load_model(robot_model_init, s=s_des, xyz_rpy=xyz_rpy)
+    return (
+        jax_instance,
+        s_des,
+        robot_model_init,
+        joint_name_list,
     )
+
+
+def objective(trial):
+    K = trial.suggest_float("K", 1e4, 1e8, log=True)
+    D = trial.suggest_float("D", 1e3, 1e8, log=True)
+    mu = trial.suggest_float("mu", 0.0, 1.0)
+
+    jax.config.update("jax_platform_name", "cpu")
+
+    TERRAIN_PARAMETERS = (K, D, mu)
+
+    logging.Console().log(f"Terrain parameters: K={K}, D={D}, mu={mu}")
+
+    s_des, *_ = robot_model_init.compute_desired_position_walking()
+
+    jax_instance.set_terrain_parameters(TERRAIN_PARAMETERS)
+
     s, ds, tau = jax_instance.get_state()
-    t = 0.0  # jax_instance.get_simulation_time()
+    t = 0.0
     H_b = jax_instance.get_base()
     w_b = jax_instance.get_base_velocity()
 
@@ -132,7 +156,6 @@ def init(TERRAIN_PARAMETERS):
     s, ds, tau = jax_instance.get_state()
     H_b = jax_instance.get_base()
     w_b = jax_instance.get_base_velocity()
-    t = 0.0
 
     # MPC
     mpc.set_state_with_base(s=s, s_dot=ds, H_b=H_b, w_b=w_b, t=t)
@@ -147,11 +170,6 @@ def init(TERRAIN_PARAMETERS):
     n_step_mpc_tsid = int(
         mpc.get_frequency_seconds() / TSID_controller_instance.frequency
     )
-
-    counter = 0
-    mpc_success = True
-    energy_tot = 0.0
-    succeded_controller = True
 
     mj_list = [
         "r_shoulder_pitch",  # 0
@@ -179,38 +197,28 @@ def init(TERRAIN_PARAMETERS):
     joint_map = get_joint_map(mj_list, jax_instance.model.joint_names())
     assert all(np.array(mj_list) == np.array(joint_name_list)[joint_map])
 
-    return (
-        jax_instance,
-        s_des,
-        TSID_controller_instance,
-        mpc,
-        n_step,
-        n_step_mpc_tsid,
-        counter,
-        t,
+    s_des, xyz_rpy, H_b = robot_model_init.compute_desired_position_walking()
+
+    jax_instance.data = jax_instance.data.reset_base_position(
+        base_position=jnp.array(xyz_rpy[:3]),
     )
 
+    jax_instance.data = jax_instance.data.reset_base_quaternion(
+        base_quaternion=jnp.array(jax_instance.RPY_to_quat(*xyz_rpy[3:])),
+    )
 
-def objective(trial):
-    K = trial.suggest_float("K", 1e3, 1e7, log=True)
-    D = trial.suggest_float("D", 1e2, 1e4, log=True)
-    mu = trial.suggest_float("mu", 0.0, 1.0)
-
-    TERRAIN_PARAMETERS = (K, D, mu)
-
-    (
-        jax_instance,
-        s_des,
-        TSID_controller_instance,
-        mpc,
-        n_step,
-        n_step_mpc_tsid,
-        counter,
-        t,
-    ) = init(TERRAIN_PARAMETERS)
+    jax_instance.data = jax_instance.data.reset_joint_positions(
+        positions=jnp.array(s_des),
+    )
 
     # contact_forces = []
     # Simulation-control loop
+    t = 0.0
+    counter = 0
+    mpc_success = True
+    energy_tot = 0.0
+    succeded_controller = True
+
     while t < 10:
         t = t + jax_instance.dt
 
@@ -258,11 +266,15 @@ def objective(trial):
         succeded_controller = TSID_controller_instance.run()
 
         # Get a score on the controller
-        score = np.square(
-            left_foot_force[:3] - forces_left + right_foot_force[:3] - forces_right
+        score = (
+            np.square(left_foot_force[:3] - forces_left)
+            + np.square(right_foot_force[:3] - forces_right)
         ).sum()
 
         trial.report(score, t)
+
+        if trial.should_prune():
+            raise optuna.TrialPruned()
 
         if not (succeded_controller):
             print("Controller failed")
@@ -277,20 +289,26 @@ def objective(trial):
         if counter == n_step_mpc_tsid:
             counter = 0
 
-    return t
+    return 1 - t / 10
 
 
 if __name__ == "__main__":
     import argparse
 
-    args = argparse.ArgumentParser()
-    args.add_argument("--jobs", type=int, default=1)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--jobs", type=int, default=1)
+    parser.add_argument("--trials", type=int, default=10)
+    args = parser.parse_args()
+
+    global jax_instance, s_des, robot_model_init, joint_name_list
+
+    jax_instance, s_des, robot_model_init, joint_name_list = init()
 
     study = optuna.create_study(
-        direction="maximize", study_name="MPC-TSID", sampler=CmaEsSampler()
+        direction="minimize", study_name="MPC-TSID", sampler=CmaEsSampler()
     )
     study.optimize(
-        objective, n_trials=100, show_progress_bar=True, n_jobs=args.parse_args().jobs
+        objective, n_trials=args.trials, show_progress_bar=True, n_jobs=args.jobs
     )
 
     pruned_trials = study.get_trials(deepcopy=False, states=[TrialState.PRUNED])
