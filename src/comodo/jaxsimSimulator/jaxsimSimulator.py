@@ -1,6 +1,7 @@
 import logging
 from typing import Union
-
+import math
+import jaxsim
 import jax.numpy as jnp
 import jaxsim.api as js
 import numpy as np
@@ -11,12 +12,13 @@ from jaxsim import sixd
 from jaxsim.mujoco.visualizer import MujocoVisualizer
 from jaxsim.mujoco.model import MujocoModelHelper
 from jaxsim.mujoco.loaders import UrdfToMjcf
+import jaxlie
 
 
 class JaxsimSimulator(Simulator):
 
     def __init__(self) -> None:
-        self.dt = 1e-3
+        self.dt = 1 / 500
         self.tau = jnp.zeros(20)
         self.visualize_robot_flag = None
         self.viz = None
@@ -28,6 +30,7 @@ class JaxsimSimulator(Simulator):
         xyz_rpy: npt.ArrayLike = None,
         kv_motors=None,
         Im=None,
+        terrain_params=None,
     ) -> None:
         logging.warning("Motor parameters are not supported in JaxsimSimulator")
         xyz_rpy[2] = xyz_rpy[2] + 0.0005
@@ -46,19 +49,33 @@ class JaxsimSimulator(Simulator):
             base_position=jnp.array(xyz_rpy[:3]),
             base_quaternion=jnp.array(self.RPY_to_quat(*xyz_rpy[3:])),
             joint_positions=jnp.array(s),
-        )
-
-        self.data = data0.replace(
-            soft_contacts_params=js.contact.estimate_good_soft_contacts_parameters(
-                model, number_of_active_collidable_points_steady_state=2
+            soft_contacts_params=jaxsim.rbda.SoftContactsParams.build(
+                K=1e6, D=1e4, mu=0.8
             ),
         )
 
-        logging.warning(
-            f"Defaulting to optimized ground parameters: {self.data.soft_contacts_params}"
-        )
+        if terrain_params:
+            self.data = data0.replace(
+                soft_contacts_params=jaxsim.rbda.SoftContactsParams.build(
+                    mu=terrain_params["mu"],
+                    K=terrain_params["K"],
+                    D=terrain_params["D"],
+                )
+            )
+        else:
+            self.data = data0.replace(
+                soft_contacts_params=jaxsim.rbda.SoftContactsParams.build(
+                    K=536924.14268 * 1,
+                    D=10993.23995 * 20,
+                    mu=0.8,
+                )
+            )
 
-        self.integrator = integrators.fixed_step.RungeKutta4SO3.build(
+            logging.warning(
+                f"Defaulting to optimized ground parameters: {self.data.soft_contacts_params}"
+            )
+
+        self.integrator = integrators.fixed_step.Heun2SO3.build(
             dynamics=js.ode.wrap_system_dynamics_for_integration(
                 model=model,
                 data=self.data,
@@ -73,7 +90,7 @@ class JaxsimSimulator(Simulator):
         self.model = model
 
     def get_feet_wrench(self) -> npt.ArrayLike:
-        wrenches = self.data.aux["tf"]["contact_forces_links"]
+        wrenches = js.model.link_contact_forces(model=self.model, data=self.data)
 
         left_foot = np.array(wrenches[-2])
         right_foot = np.array(wrenches[-1])
@@ -110,7 +127,7 @@ class JaxsimSimulator(Simulator):
         # wxyz -> xyzw
         to_xyzw = np.array([1, 2, 3, 0])
 
-        base_orientation = sixd.so3.SO3.from_quaternion_xyzw(
+        base_orientation = jaxlie.SO3.from_quaternion_xyzw(
             base_unit_quaternion[to_xyzw]
         ).as_matrix()
 
@@ -141,12 +158,12 @@ class JaxsimSimulator(Simulator):
         pass
 
     def RPY_to_quat(self, roll, pitch, yaw):
-        cr = np.cos(roll / 2)
-        cp = np.cos(pitch / 2)
-        cy = np.cos(yaw / 2)
-        sr = np.sin(roll / 2)
-        sp = np.sin(pitch / 2)
-        sy = np.sin(yaw / 2)
+        cr = math.cos(roll / 2)
+        cp = math.cos(pitch / 2)
+        cy = math.cos(yaw / 2)
+        sr = math.sin(roll / 2)
+        sp = math.sin(pitch / 2)
+        sy = math.sin(yaw / 2)
 
         qw = cr * cp * cy + sr * sp * sy
         qx = sr * cp * cy - cr * sp * sy
@@ -181,3 +198,12 @@ class JaxsimSimulator(Simulator):
             joint_names=self.model.joint_names(),
         )
         self.viz.sync(viewer=self._handle)
+
+    def set_terrain_parameters(self, terrain_params: npt.ArrayLike) -> None:
+        terrain_params_dict = dict(zip(["K", "D", "mu"], terrain_params))
+
+        self.data = self.data.replace(
+            soft_contacts_params=jaxsim.rbda.SoftContactsParams.build(
+                **terrain_params_dict
+            )
+        )
