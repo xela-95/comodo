@@ -8,17 +8,16 @@ import numpy as np
 import numpy.typing as npt
 from comodo.abstractClasses.simulator import Simulator
 from jaxsim import VelRepr, integrators
-from jaxsim import sixd
 from jaxsim.mujoco.visualizer import MujocoVisualizer
 from jaxsim.mujoco.model import MujocoModelHelper
 from jaxsim.mujoco.loaders import UrdfToMjcf
-import jaxlie
+from jaxsim.rbda.contacts.rigid import RigidContacts, RigidContactParams
 
 
 class JaxsimSimulator(Simulator):
 
     def __init__(self) -> None:
-        self.dt = 1 / 500
+        self.dt = 1 / 2000
         self.tau = jnp.zeros(20)
         self.visualize_robot_flag = None
         self.viz = None
@@ -33,49 +32,29 @@ class JaxsimSimulator(Simulator):
         terrain_params=None,
     ) -> None:
         logging.warning("Motor parameters are not supported in JaxsimSimulator")
-        xyz_rpy[2] = xyz_rpy[2] + 0.0005
+        xyz_rpy[2] = xyz_rpy[2]  # + 0.006
         model = js.model.JaxSimModel.build_from_model_description(
             model_description=robot_model.urdf_string,
             model_name=robot_model.robot_name,
             is_urdf=True,
+            contact_model=RigidContacts(
+                parameters=RigidContactParams(mu=0.5, K=0.0, D=0.0)
+            ),
         )
         model = js.model.reduce(
-            model=model, considered_joints=robot_model.joint_name_list
+            model=model,
+            considered_joints=robot_model.joint_name_list,
         )
 
-        data0 = js.data.JaxSimModelData.build(
+        self.data = js.data.JaxSimModelData.build(
             model=model,
             velocity_representation=VelRepr.Inertial,
             base_position=jnp.array(xyz_rpy[:3]),
             base_quaternion=jnp.array(self.RPY_to_quat(*xyz_rpy[3:])),
             joint_positions=jnp.array(s),
-            soft_contacts_params=jaxsim.rbda.SoftContactsParams.build(
-                K=1e6, D=1e4, mu=0.8
-            ),
         )
 
-        if terrain_params:
-            self.data = data0.replace(
-                soft_contacts_params=jaxsim.rbda.SoftContactsParams.build(
-                    mu=terrain_params["mu"],
-                    K=terrain_params["K"],
-                    D=terrain_params["D"],
-                )
-            )
-        else:
-            self.data = data0.replace(
-                soft_contacts_params=jaxsim.rbda.SoftContactsParams.build(
-                    K=536924.14268 * 1,
-                    D=10993.23995 * 20,
-                    mu=0.8,
-                )
-            )
-
-            logging.warning(
-                f"Defaulting to optimized ground parameters: {self.data.soft_contacts_params}"
-            )
-
-        self.integrator = integrators.fixed_step.Heun2SO3.build(
+        self.integrator = integrators.fixed_step.RungeKutta4SO3.build(
             dynamics=js.ode.wrap_system_dynamics_for_integration(
                 model=model,
                 data=self.data,
@@ -92,8 +71,8 @@ class JaxsimSimulator(Simulator):
     def get_feet_wrench(self) -> npt.ArrayLike:
         wrenches = js.model.link_contact_forces(model=self.model, data=self.data)
 
-        left_foot = np.array(wrenches[-2])
-        right_foot = np.array(wrenches[-1])
+        left_foot = np.array(wrenches[19])
+        right_foot = np.array(wrenches[20])
         return left_foot, right_foot
 
     def set_input(self, input: npt.ArrayLike) -> None:
@@ -111,32 +90,14 @@ class JaxsimSimulator(Simulator):
             integrator=self.integrator,
             integrator_state=self.integrator_state,
             joint_forces=torque,
+            link_forces=None,  # f
         )
 
         if self.visualize_robot_flag:
             self.render()
 
     def get_base(self) -> npt.ArrayLike:
-        base_position = np.vstack(self.data.state.physics_model.base_position)
-
-        base_unit_quaternion = (
-            self.data.state.physics_model.base_quaternion.squeeze()
-            / jnp.linalg.norm(self.data.state.physics_model.base_quaternion)
-        )
-
-        # wxyz -> xyzw
-        to_xyzw = np.array([1, 2, 3, 0])
-
-        base_orientation = jaxlie.SO3.from_quaternion_xyzw(
-            base_unit_quaternion[to_xyzw]
-        ).as_matrix()
-
-        return np.vstack(
-            [
-                np.block([base_orientation, base_position]),
-                np.array([0, 0, 0, 1]),
-            ]
-        )
+        return np.array(self.data.base_transform())
 
     def get_base_velocity(self) -> npt.ArrayLike:
         return np.array(self.data.base_velocity())
@@ -201,6 +162,8 @@ class JaxsimSimulator(Simulator):
 
     def set_terrain_parameters(self, terrain_params: npt.ArrayLike) -> None:
         terrain_params_dict = dict(zip(["K", "D", "mu"], terrain_params))
+
+        logging.warning(f"Setting terrain parameters: {terrain_params_dict}")
 
         self.data = self.data.replace(
             soft_contacts_params=jaxsim.rbda.SoftContactsParams.build(
