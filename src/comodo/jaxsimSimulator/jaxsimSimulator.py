@@ -11,7 +11,8 @@ from jaxsim import VelRepr, integrators
 from jaxsim.mujoco.visualizer import MujocoVisualizer
 from jaxsim.mujoco.model import MujocoModelHelper
 from jaxsim.mujoco.loaders import UrdfToMjcf
-from jaxsim.rbda.contacts.rigid import RigidContacts, RigidContactParams
+from jaxsim.rbda.contacts.rigid import RigidContacts, RigidContactsParams
+from jaxsim.rbda.contacts.relaxed_rigid import RelaxedRigidContacts
 
 
 class JaxsimSimulator(Simulator):
@@ -32,14 +33,14 @@ class JaxsimSimulator(Simulator):
         terrain_params=None,
     ) -> None:
         logging.warning("Motor parameters are not supported in JaxsimSimulator")
-        xyz_rpy[2] = xyz_rpy[2]  # + 0.006
         model = js.model.JaxSimModel.build_from_model_description(
             model_description=robot_model.urdf_string,
             model_name=robot_model.robot_name,
             is_urdf=True,
             contact_model=RigidContacts(
-                parameters=RigidContactParams(mu=0.5, K=0.0, D=0.0)
+                parameters=RigidContactsParams(mu=0.5, K=0.0, D=0.0)
             ),
+            # contact_model=RelaxedRigidContacts(),
         )
         model = js.model.reduce(
             model=model,
