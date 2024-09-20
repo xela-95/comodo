@@ -18,7 +18,7 @@ from jaxsim.rbda.contacts.relaxed_rigid import RelaxedRigidContacts
 class JaxsimSimulator(Simulator):
 
     def __init__(self) -> None:
-        self.dt = 1 / 2000
+        self.dt = 1 / 1000
         self.tau = jnp.zeros(20)
         self.visualize_robot_flag = None
         self.viz = None
@@ -38,7 +38,7 @@ class JaxsimSimulator(Simulator):
             model_name=robot_model.robot_name,
             is_urdf=True,
             contact_model=RigidContacts(
-                parameters=RigidContactsParams(mu=0.5, K=0.0, D=0.0)
+                parameters=RigidContactsParams(mu=0.5, K=1.0e4, D=1.0e2)
             ),
             # contact_model=RelaxedRigidContacts(),
         )
@@ -49,7 +49,7 @@ class JaxsimSimulator(Simulator):
 
         self.data = js.data.JaxSimModelData.build(
             model=model,
-            velocity_representation=VelRepr.Inertial,
+            velocity_representation=VelRepr.Mixed,
             base_position=jnp.array(xyz_rpy[:3]),
             base_quaternion=jnp.array(self.RPY_to_quat(*xyz_rpy[3:])),
             joint_positions=jnp.array(s),
