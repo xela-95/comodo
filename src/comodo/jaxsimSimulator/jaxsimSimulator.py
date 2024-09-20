@@ -23,6 +23,7 @@ class JaxsimSimulator(Simulator):
         self.tau = jnp.zeros(20)
         self.visualize_robot_flag = None
         self.viz = None
+        self.recorder = None
 
     def load_model(
         self,
@@ -50,7 +51,7 @@ class JaxsimSimulator(Simulator):
 
         self.data = js.data.JaxSimModelData.build(
             model=model,
-            velocity_representation=VelRepr.Mixed,
+            velocity_representation=VelRepr.Inertial,
             base_position=jnp.array(xyz_rpy[:3]),
             base_quaternion=jnp.array(self.RPY_to_quat(*xyz_rpy[3:])),
             joint_positions=jnp.array(s),
@@ -85,15 +86,20 @@ class JaxsimSimulator(Simulator):
         if torque is None:
             torque = np.zeros(20)
 
-        self.data, self.integrator_state = js.model.step(
-            dt=self.dt,
-            model=self.model,
-            data=self.data,
-            integrator=self.integrator,
-            integrator_state=self.integrator_state,
-            joint_forces=torque,
-            link_forces=None,  # f
-        )
+        try:
+            self.data, self.integrator_state = js.model.step(
+                dt=self.dt,
+                model=self.model,
+                data=self.data,
+                integrator=self.integrator,
+                integrator_state=self.integrator_state,
+                joint_forces=torque,
+                link_forces=None,  # f
+            )
+        except Exception as e:
+            print(e)
+        finally:
+            self.save_video(pathlib.Path("exception_video.mp4"))
 
         if self.visualize_robot_flag:
             self.render()
