@@ -13,6 +13,7 @@ from jaxsim.mujoco.model import MujocoModelHelper
 from jaxsim.mujoco.loaders import UrdfToMjcf
 from jaxsim.rbda.contacts.rigid import RigidContacts, RigidContactsParams
 from jaxsim.rbda.contacts.relaxed_rigid import RelaxedRigidContacts
+import pathlib
 
 
 class JaxsimSimulator(Simulator):
@@ -160,6 +161,38 @@ class JaxsimSimulator(Simulator):
             joint_names=self.model.joint_names(),
         )
         self.viz.sync(viewer=self._handle)
+
+    def record_frame(self):
+        if not self.recorder:
+            mjcf_string, assets = UrdfToMjcf.convert(
+                urdf=self.model.built_from,
+            )
+
+            self.mj_model_helper = MujocoModelHelper.build_from_xml(
+                mjcf_description=mjcf_string, assets=assets
+            )
+
+            self.recorder = jaxsim.mujoco.MujocoVideoRecorder(
+                model=self.mj_model_helper.model,
+                data=self.mj_model_helper.data,
+                fps=int(1 / self.dt),
+            )
+
+        self.mj_model_helper.set_base_position(
+            position=self.data.base_position(),
+        )
+        self.mj_model_helper.set_base_orientation(
+            orientation=self.data.base_orientation(),
+        )
+        self.mj_model_helper.set_joint_positions(
+            positions=self.data.joint_positions(),
+            joint_names=self.model.joint_names(),
+        )
+
+        self.recorder.record_frame()
+
+    def save_video(self, file_path: str | pathlib.Path):
+        self.recorder.write_video(path=file_path)
 
     def set_terrain_parameters(self, terrain_params: npt.ArrayLike) -> None:
         terrain_params_dict = dict(zip(["K", "D", "mu"], terrain_params))
