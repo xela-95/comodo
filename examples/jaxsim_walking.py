@@ -189,3 +189,168 @@ mpc.initialize_centroidal_integrator(
 )
 mpc_output = mpc.plan_trajectory()
 
+# %%
+# ==== Define the simulation loop ====
+
+
+def simulate(
+    T: float,
+    js: JaxsimSimulator,
+    tsid: TSIDController,
+    mpc: CentroidalMPC,
+    to_mj: list[int],
+    to_js: list[int],
+    s_ref: list[float],
+) -> dict[str, np.array]:
+
+    # Acronyms:
+    # - lf, rf: left foot, right foot
+    # - js: JaxSim
+    # - tsid: Task Space Inverse Dynamics
+    # - mpc: Model Predictive Control
+    # - sfp: Swing Foot Planner
+    # - mj: Mujoco
+    # - s: joint positions
+    # - ds: joint velocities
+    # - τ: joint torques
+    # - b: base
+    # - com: center of mass
+    # - dcom: center of mass velocity
+
+    # Logging
+    s_js_log = []
+    ds_js_log = []
+    W_p_CoM_js_log = []
+    W_p_lf_js_log = []
+    W_p_rf_js_log = []
+    W_p_CoM_mpc_log = []
+    W_p_lf_sfp_log = []
+    W_p_rf_sfp_log = []
+    f_lf_mpc_log = []
+    f_rf_mpc_log = []
+    f_lf_js_log = []
+    f_rf_js_log = []
+    tau_tsid_log = []
+    W_p_CoM_tsid_log = []
+    t_log = []
+
+    # Define number of steps
+    n_step_tsid_js = int(tsid.frequency / dt)
+    n_step_mpc_tsid = int(mpc.get_frequency_seconds() / tsid.frequency)
+    print(f"{n_step_mpc_tsid=}, {n_step_tsid_js=}")
+    counter = 0
+    mpc_success = True
+    succeded_controller = True
+
+    t = 0.0
+
+    while t < T:
+        print(f"==== Time: {t:.4f}s ====", flush=True, end="\r")
+
+        # Reading robot state from simulator
+        s_js, ds_js, tau_js = js.get_state()
+        H_b = js.get_base()
+        w_b = js.get_base_velocity()
+        t = js.get_simulation_time()
+
+        # Update TSID
+        tsid.set_state_with_base(
+            s=s_js[to_mj], s_dot=ds_js[to_mj], H_b=H_b, w_b=w_b, t=t
+        )
+
+        # MPC plan
+        if counter == 0:
+            mpc.set_state_with_base(
+                s=s_js[to_mj], s_dot=ds_js[to_mj], H_b=H_b, w_b=w_b, t=t
+            )
+            mpc.update_references()
+            mpc_success = mpc.plan_trajectory()
+            mpc.contact_planner.advance_swing_foot_planner()
+            if not (mpc_success):
+                print("MPC failed")
+                break
+
+        # Reading new references
+        com_mpc, dcom_mpc, f_lf_mpc, f_rf_mpc, ang_mom_mpc = mpc.get_references()
+        lf_sfp, rf_sfp = mpc.contact_planner.get_references_swing_foot_planner()
+
+        f_lf_js, f_rf_js = js.get_feet_wrench()
+
+        tsid.compute_com_position()
+
+        # Update references TSID
+        tsid.update_task_references_mpc(
+            com=com_mpc,
+            dcom=dcom_mpc,
+            ddcom=np.zeros(3),
+            left_foot_desired=lf_sfp,
+            right_foot_desired=rf_sfp,
+            s_desired=np.array(s_ref),
+            wrenches_left=f_lf_mpc,
+            wrenches_right=f_rf_mpc,
+        )
+
+        # Run control
+        succeded_controller = tsid.run()
+
+        if not (succeded_controller):
+            print("Controller failed")
+            break
+
+        tau_tsid = tsid.get_torque()
+
+        # Step the simulator
+        js.step(n_step=n_step_tsid_js, torques=tau_tsid[to_js])
+        counter = counter + 1
+
+        if t % int(1e9 / js.recorder.fps) == 0:
+            js.record_frame()
+            js.render()
+
+        if counter == n_step_mpc_tsid:
+            counter = 0
+
+        # Stop the simulation if the robot fell down
+        if js.data.base_position()[2] < 0.5:
+            print(f"Robot fell down at t={t:.4f}s.")
+            break
+
+        # Log data
+        t_log.append(t)
+        tau_tsid_log.append(tau_tsid)
+        s_js_log.append(s_js)
+        ds_js_log.append(ds_js)
+        W_p_CoM_js_log.append(js.get_com_position())
+        W_p_lf_js, W_p_rf_js = js.get_feet_positions()
+        W_p_lf_js_log.append(W_p_lf_js)
+        W_p_rf_js_log.append(W_p_rf_js)
+        f_lf_js_log.append(f_lf_js)
+        f_rf_js_log.append(f_rf_js)
+        W_p_CoM_mpc_log.append(com_mpc)
+        f_lf_mpc_log.append(f_lf_mpc)
+        f_rf_mpc_log.append(f_rf_mpc)
+        W_p_lf_sfp_log.append(lf_sfp.transform.translation)
+        W_p_rf_sfp_log.append(rf_sfp.transform.translation)
+        W_p_CoM_tsid_log.append(tsid.COM.toNumPy())
+
+    logs = {
+        "t": np.array(t_log),
+        "s_js": np.array(s_js_log),
+        "ds_js": np.array(ds_js_log),
+        "tau_tsid": np.array(tau_tsid_log),
+        "W_p_CoM_js": np.array(W_p_CoM_js_log),
+        "W_p_lf_js": np.array(W_p_lf_js_log),
+        "W_p_rf_js": np.array(W_p_rf_js_log),
+        "f_lf_js": np.array(f_lf_js_log),
+        "f_rf_js": np.array(f_rf_js_log),
+        "W_p_CoM_mpc": np.array(W_p_CoM_mpc_log),
+        "f_lf_mpc": np.array(f_lf_mpc_log),
+        "f_rf_mpc": np.array(f_rf_mpc_log),
+        "W_p_lf_sfp": np.array(W_p_lf_sfp_log),
+        "W_p_rf_sfp": np.array(W_p_rf_sfp_log),
+        "W_p_CoM_tsid": np.array(W_p_CoM_tsid_log),
+    }
+
+    return logs
+
+
