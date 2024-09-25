@@ -354,3 +354,146 @@ def simulate(
     return logs
 
 
+# %%
+# ==== Set simulation parameters ====
+
+T = 2.0
+dt = js.dt
+
+
+# %%
+# ==== Run the simulation ====
+
+
+now = time.perf_counter()
+
+logs = simulate(T=T, js=js, tsid=tsid, mpc=mpc, to_mj=to_mj, to_js=to_js, s_ref=s_0)
+
+wall_time = time.perf_counter() - now
+avg_iter_time_ms = (wall_time / (T / dt)) * 1000
+
+print(
+    f"\nRunning simulation took {wall_time:.2f}s for {T:.3f}s simulated time. \nIteration avg time of {avg_iter_time_ms:.1f} ms."
+)
+print(f"RTF: {T / wall_time * 100:.2f}%")
+
+# %%
+# ==== Plot the results ====
+
+# Extract logged variables
+t = logs["t"]
+s_js = logs["s_js"]
+ds_js = logs["ds_js"]
+tau_tsid = logs["tau_tsid"]
+W_p_CoM_js = logs["W_p_CoM_js"]
+W_p_lf_js = logs["W_p_lf_js"]
+W_p_rf_js = logs["W_p_rf_js"]
+f_lf_js = logs["f_lf_js"]
+f_rf_js = logs["f_rf_js"]
+W_p_CoM_mpc = logs["W_p_CoM_mpc"]
+f_lf_mpc = logs["f_lf_mpc"]
+f_rf_mpc = logs["f_rf_mpc"]
+W_p_lf_sfp = logs["W_p_lf_sfp"]
+W_p_rf_sfp = logs["W_p_rf_sfp"]
+W_p_CoM_tsid = logs["W_p_CoM_tsid"]
+
+# s = np.vstack(s)
+# ds = np.vstack(ds)
+# tau_tsid = np.vstack(tau_tsid)
+# W_p_CoM_js = np.vstack(W_p_CoM_js)
+# W_p_lf_js = np.vstack(W_p_lf_js)
+# W_p_rf_js = np.vstack(W_p_rf_js)
+# f_lf_js = np.vstack(f_lf_js)
+# f_rf_js = np.vstack(f_rf_js)
+# W_p_CoM_mpc = np.vstack(W_p_CoM_mpc)
+# f_lf_mpc = np.vstack(f_lf_mpc)
+# f_rf_mpc = np.vstack(f_rf_mpc)
+# W_p_lf_sfp = np.vstack(W_p_lf_sfp)
+# W_p_rf_sfp = np.vstack(W_p_rf_sfp)
+# W_p_CoM_tsid = np.vstack(W_p_CoM_tsid)
+
+n_sim_steps = s_js.shape[0]
+s_0_to_js = np.full_like(a=s_js, fill_value=s_0[to_js])
+
+# Joint tracking
+fig, axs = plt.subplots(
+    nrows=int(np.ceil(len(js_joint_names) / 2)), ncols=2, sharex=True, figsize=(12, 16)
+)
+for idx, name in enumerate(js_joint_names):
+    ax = axs[idx // 2, idx % 2]
+    ax.title.set_text(name)
+    ax.plot(t, s_js[:, idx] * 180 / np.pi, label="Simulated")
+    ax.plot(
+        t,
+        s_0_to_js[:, idx] * 180 / np.pi,
+        linestyle="--",
+        label="Reference",
+    )
+    ax.grid()
+    ax.set_ylabel("[deg]")
+    ax.legend()
+plt.suptitle("Joint tracking")
+plt.show()
+
+# Joint tracking error
+fig, axs = plt.subplots(
+    nrows=int(np.ceil(len(js_joint_names) / 2)), ncols=2, sharex=True, figsize=(12, 16)
+)
+for idx, name in enumerate(js_joint_names):
+    ax = axs[idx // 2, idx % 2]
+    ax.title.set_text(name)
+    ax.plot(t, (s_js[:, idx] - s_js[:, idx]) * 180 / np.pi)
+    ax.grid()
+    ax.set_ylabel("[deg]")
+plt.suptitle("Joint tracking error (reference - simulated)")
+plt.tight_layout()
+plt.show()
+
+# Feet height
+fig, axs = plt.subplots(nrows=1, ncols=2, sharey=True)
+ax = axs[0]
+ax.title.set_text("Left foot sole height")
+ax.plot(t, W_p_lf_js[:, 2], label="")
+ax.grid()
+ax.set_ylabel("Height [m]")
+ax = axs[1]
+ax.title.set_text("Right foot sole height")
+ax.plot(t, W_p_rf_js[:, 2], label="")
+ax.grid()
+plt.show()
+
+# COM tracking
+fig = plt.figure()
+ax1, ax2, ax3 = fig.subplots(nrows=3, ncols=1, sharex=True)
+ax1.title.set_text("Center of mass: x component")
+ax1.plot(t, W_p_CoM_js[:, 0], label="Simulated")
+ax1.plot(t, W_p_CoM_mpc[:, 0], linestyle="--", label="MPC References")
+ax2.title.set_text("Center of mass: y component")
+ax2.plot(t, W_p_CoM_js[:, 1], label="Simulated")
+ax2.plot(t, W_p_CoM_mpc[:, 1], linestyle="--", label="MPC References")
+ax3.title.set_text("Center of mass: z component")
+ax3.plot(t, W_p_CoM_js[:, 2], label="Simulated")
+ax3.plot(t, W_p_CoM_mpc[:, 2], linestyle="--", label="MPC References")
+ax1.legend()
+ax2.legend()
+ax3.legend()
+ax1.grid()
+ax2.grid()
+ax3.grid()
+plt.xlabel("Time [s]")
+plt.show(block=False)
+
+# Torques
+fig, axs = plt.subplots(
+    nrows=int(np.ceil(len(js_joint_names) / 2)), ncols=2, sharex=True, figsize=(12, 12)
+)
+for idx, name in enumerate(js_joint_names):
+    ax = axs[idx // 2, idx % 2]
+    ax.title.set_text(name)
+    ax.plot(t, tau_tsid[:, idx], label="TSID References")
+    ax.legend()
+    ax.grid()
+    ax.set_ylabel("[Nm]")
+plt.suptitle("Joint torques")
+plt.tight_layout()
+plt.show()
