@@ -19,11 +19,16 @@ import pathlib
 class JaxsimSimulator(Simulator):
 
     def __init__(self) -> None:
-        self.dt = 1 / 1000
+        self.dt = 0.000_5
         self.tau = jnp.zeros(20)
         self.visualize_robot_flag = None
         self.viz = None
         self.recorder = None
+        self.link_contact_forces = None
+        self.left_foot_link_idx = None
+        self.right_foot_link_idx = None
+        self.left_footsole_frame_idx = None
+        self.right_footsole_frame_idx = None
 
     def load_model(
         self,
@@ -51,13 +56,13 @@ class JaxsimSimulator(Simulator):
 
         self.data = js.data.JaxSimModelData.build(
             model=model,
-            velocity_representation=VelRepr.Inertial,
+            velocity_representation=VelRepr.Mixed,
             base_position=jnp.array(xyz_rpy[:3]),
             base_quaternion=jnp.array(self.RPY_to_quat(*xyz_rpy[3:])),
             joint_positions=jnp.array(s),
         )
 
-        self.integrator = integrators.fixed_step.RungeKutta4SO3.build(
+        self.integrator = integrators.fixed_step.RungeKutta4.build(
             dynamics=js.ode.wrap_system_dynamics_for_integration(
                 model=model,
                 data=self.data,
@@ -71,35 +76,70 @@ class JaxsimSimulator(Simulator):
 
         self.model = model
 
-    def get_feet_wrench(self) -> npt.ArrayLike:
-        wrenches = js.model.link_contact_forces(model=self.model, data=self.data)
+        # TODO: expose these names as parameters
+        self.left_foot_link_idx = js.link.name_to_idx(
+            model=self.model, link_name="l_ankle_2"
+        )
+        self.right_foot_link_idx = js.link.name_to_idx(
+            model=self.model, link_name="r_ankle_2"
+        )
+        self.left_footsole_frame_idx = js.frame.name_to_idx(
+            model=self.model, frame_name="l_sole"
+        )
+        self.right_footsole_frame_idx = js.frame.name_to_idx(
+            model=self.model, frame_name="r_sole"
+        )
 
-        left_foot = np.array(wrenches[19])
-        right_foot = np.array(wrenches[20])
+        mjcf_string, assets = UrdfToMjcf.convert(
+            urdf=self.model.built_from,
+        )
+
+        self.mj_model_helper = MujocoModelHelper.build_from_xml(
+            mjcf_description=mjcf_string, assets=assets
+        )
+
+        self.recorder = jaxsim.mujoco.MujocoVideoRecorder(
+            model=self.mj_model_helper.model,
+            data=self.mj_model_helper.data,
+            fps=50,
+        )
+
+    def get_feet_wrench(self) -> npt.ArrayLike:
+        wrenches = self.get_link_contact_forces()
+
+        left_foot = np.array(wrenches[self.left_foot_link_idx])
+        right_foot = np.array(wrenches[self.right_foot_link_idx])
         return left_foot, right_foot
 
     def set_input(self, input: npt.ArrayLike) -> None:
         self.tau = jnp.array(input)
 
-    def step(self, torque: np.ndarray = None, n_step: int = 1) -> None:
+    def step(self, torques: np.ndarray = None, n_step: int = 1) -> None:
 
-        if torque is None:
-            torque = np.zeros(20)
+        if torques is None:
+            torques = np.zeros(20)
 
         try:
-            self.data, self.integrator_state = js.model.step(
-                dt=self.dt,
-                model=self.model,
-                data=self.data,
-                integrator=self.integrator,
-                integrator_state=self.integrator_state,
-                joint_forces=torque,
-                link_forces=None,  # f
-            )
+            for _ in range(n_step):
+                self.data, self.integrator_state = js.model.step(
+                    model=self.model,
+                    data=self.data,
+                    dt=self.dt,
+                    integrator=self.integrator,
+                    integrator_state=self.integrator_state,
+                    joint_forces=torques,
+                    link_forces=None,  # f
+                )
         except Exception as e:
-            print(e)
-        finally:
-            self.save_video(pathlib.Path("exception_video.mp4"))
+            print(f"Exception in model.step:\n{e}")
+        # finally:
+        #     self.save_video(pathlib.Path("exception_video.mp4"))
+
+        self.link_contact_forces = js.model.link_contact_forces(
+            model=self.model,
+            data=self.data,
+            joint_force_references=torques,
+        )
 
         if self.visualize_robot_flag:
             self.render()
@@ -120,8 +160,28 @@ class JaxsimSimulator(Simulator):
 
         return s, s_dot, tau
 
+    def get_link_contact_forces(self) -> npt.ArrayLike:
+        return self.link_contact_forces
+
     def total_mass(self) -> float:
         return js.model.total_mass(self.model)
+
+    def get_feet_positions(self) -> tuple[npt.ArrayLike, npt.ArrayLike]:
+        W_p_lf = js.frame.transform(
+            model=self.model,
+            data=self.data,
+            frame_index=self.left_footsole_frame_idx,
+        )[0:3, 3]
+        W_p_rf = js.frame.transform(
+            model=self.model,
+            data=self.data,
+            frame_index=self.right_footsole_frame_idx,
+        )[0:3, 3]
+
+        return (W_p_lf, W_p_rf)
+
+    def get_com_position(self) -> npt.ArrayLike:
+        return js.com.com_position(self.model, self.data)
 
     def close(self) -> None:
         pass
@@ -169,21 +229,6 @@ class JaxsimSimulator(Simulator):
         self.viz.sync(viewer=self._handle)
 
     def record_frame(self):
-        if not self.recorder:
-            mjcf_string, assets = UrdfToMjcf.convert(
-                urdf=self.model.built_from,
-            )
-
-            self.mj_model_helper = MujocoModelHelper.build_from_xml(
-                mjcf_description=mjcf_string, assets=assets
-            )
-
-            self.recorder = jaxsim.mujoco.MujocoVideoRecorder(
-                model=self.mj_model_helper.model,
-                data=self.mj_model_helper.data,
-                fps=int(1 / self.dt),
-            )
-
         self.mj_model_helper.set_base_position(
             position=self.data.base_position(),
         )
