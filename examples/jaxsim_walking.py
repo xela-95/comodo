@@ -10,6 +10,9 @@ import urllib.request
 import time
 import os
 import matplotlib.pyplot as plt
+import datetime
+import pathlib
+from pathlib import Path
 
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
@@ -143,8 +146,7 @@ s_js, ds_js, tau_js = js.get_state()
 t = 0.0
 H_b = js.get_base()
 w_b = js.get_base_velocity()
-js.visualize_robot_flag = True
-js.render()
+js.visualize_robot_flag = False
 
 print(f"Contact model in use: {js.model.contact_model}")
 print(f"Link names:\n{js.model.link_names()}")
@@ -303,10 +305,6 @@ def simulate(
         js.step(n_step=n_step_tsid_js, torques=tau_tsid[to_js])
         counter = counter + 1
 
-        if t % int(1e9 / js.recorder.fps) == 0:
-            js.record_frame()
-            js.render()
-
         if counter == n_step_mpc_tsid:
             counter = 0
 
@@ -316,6 +314,7 @@ def simulate(
             break
 
         # Log data
+        # TODO transform mpc contact forces to wrenches to be compared with jaxsim ones
         t_log.append(t)
         tau_tsid_log.append(tau_tsid)
         s_js_log.append(s_js)
@@ -329,8 +328,8 @@ def simulate(
         W_p_CoM_mpc_log.append(com_mpc)
         f_lf_mpc_log.append(f_lf_mpc)
         f_rf_mpc_log.append(f_rf_mpc)
-        W_p_lf_sfp_log.append(lf_sfp.transform.translation)
-        W_p_rf_sfp_log.append(rf_sfp.transform.translation)
+        W_p_lf_sfp_log.append(lf_sfp.transform.translation())
+        W_p_rf_sfp_log.append(rf_sfp.transform.translation())
         W_p_CoM_tsid_log.append(tsid.COM.toNumPy())
 
     logs = {
@@ -357,7 +356,7 @@ def simulate(
 # %%
 # ==== Set simulation parameters ====
 
-T = 2.0
+T = 10.0
 dt = js.dt
 
 
@@ -397,21 +396,6 @@ W_p_lf_sfp = logs["W_p_lf_sfp"]
 W_p_rf_sfp = logs["W_p_rf_sfp"]
 W_p_CoM_tsid = logs["W_p_CoM_tsid"]
 
-# s = np.vstack(s)
-# ds = np.vstack(ds)
-# tau_tsid = np.vstack(tau_tsid)
-# W_p_CoM_js = np.vstack(W_p_CoM_js)
-# W_p_lf_js = np.vstack(W_p_lf_js)
-# W_p_rf_js = np.vstack(W_p_rf_js)
-# f_lf_js = np.vstack(f_lf_js)
-# f_rf_js = np.vstack(f_rf_js)
-# W_p_CoM_mpc = np.vstack(W_p_CoM_mpc)
-# f_lf_mpc = np.vstack(f_lf_mpc)
-# f_rf_mpc = np.vstack(f_rf_mpc)
-# W_p_lf_sfp = np.vstack(W_p_lf_sfp)
-# W_p_rf_sfp = np.vstack(W_p_rf_sfp)
-# W_p_CoM_tsid = np.vstack(W_p_CoM_tsid)
-
 n_sim_steps = s_js.shape[0]
 s_0_to_js = np.full_like(a=s_js, fill_value=s_0[to_js])
 
@@ -442,7 +426,7 @@ fig, axs = plt.subplots(
 for idx, name in enumerate(js_joint_names):
     ax = axs[idx // 2, idx % 2]
     ax.title.set_text(name)
-    ax.plot(t, (s_js[:, idx] - s_js[:, idx]) * 180 / np.pi)
+    ax.plot(t, (s_js[:, idx] - s_0_to_js[:, idx]) * 180 / np.pi)
     ax.grid()
     ax.set_ylabel("[deg]")
 plt.suptitle("Joint tracking error (reference - simulated)")
@@ -453,12 +437,14 @@ plt.show()
 fig, axs = plt.subplots(nrows=1, ncols=2, sharey=True)
 ax = axs[0]
 ax.title.set_text("Left foot sole height")
-ax.plot(t, W_p_lf_js[:, 2], label="")
+ax.plot(t, W_p_lf_js[:, 2], label="Simulated")
+ax.plot(t, W_p_lf_sfp[:, 2], label="Swing Foot Planner reference")
 ax.grid()
 ax.set_ylabel("Height [m]")
 ax = axs[1]
 ax.title.set_text("Right foot sole height")
-ax.plot(t, W_p_rf_js[:, 2], label="")
+ax.plot(t, W_p_rf_js[:, 2], label="Simulated")
+ax.plot(t, W_p_rf_sfp[:, 2], label="Swing Foot Planner reference")
 ax.grid()
 plt.show()
 
@@ -497,3 +483,62 @@ for idx, name in enumerate(js_joint_names):
 plt.suptitle("Joint torques")
 plt.tight_layout()
 plt.show()
+
+# Contact forces
+fig, axs = plt.subplots(nrows=3, ncols=2, figsize=(12, 12))
+titles = [
+    "Left foot force - x component",
+    "Right foot force - x component",
+    "Left foot force - y component",
+    "Right foot force - y component",
+    "Left foot force - z component",
+    "Right foot force - z component",
+]
+for row in range(3):
+    for col in range(2):
+        idx = row * 2 + col
+        force_js = f_lf_js[:, col] if col == 0 else f_rf_js[:, col]
+        force_mpc = f_lf_mpc[:, col] if col == 0 else f_rf_mpc[:, col]
+        axs[row, col].plot(t, force_js, label="Simulated")
+        # axs[row, col].plot(t, force_mpc, linestyle="--", label="MPC References")
+        axs[row, col].set_title(titles[idx])
+        axs[row, col].set_ylabel("Force [N]")
+        axs[row, col].set_xlabel("Time [s]")
+        axs[row, col].grid()
+        axs[row, col].legend()
+
+plt.suptitle("Feet contact forces")
+plt.tight_layout()
+plt.show()
+
+
+# Save video
+# Create results folder if not existing
+def get_repo_root(current_path: Path = Path(__file__).parent) -> Path:
+    current_path = current_path.resolve()
+
+    for parent in current_path.parents:
+        if (parent / ".git").exists():
+            return parent
+
+    raise RuntimeError("No .git directory found, not a Git repository.")
+
+
+def create_output_dir(directory: Path):
+    # Create the directory if it doesn't exist
+    directory.mkdir(parents=True, exist_ok=True)
+
+
+# Usage
+repo_root = get_repo_root()
+
+# Define the results directory
+results_dir = repo_root / "results"
+
+# Create the results directory if it doesn't exist
+create_output_dir(results_dir)
+now = datetime.datetime.now()
+current_time = now.strftime("%Y-%m-%d_%H-%M-%S")
+filepath = results_dir / pathlib.Path(current_time + "simulation_comodo.mp4")
+js.save_video(filepath)
+print(f"Video saved at: {filepath}")
