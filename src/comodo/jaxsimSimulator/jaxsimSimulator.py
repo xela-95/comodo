@@ -29,6 +29,9 @@ class JaxsimSimulator(Simulator):
         self.right_foot_link_idx = None
         self.left_footsole_frame_idx = None
         self.right_footsole_frame_idx = None
+        self.viz_fps = 10
+        self.last_recorded_t_ns = 0.0
+        self.last_rendered_t_ns = 0.0
 
     def load_model(
         self,
@@ -101,7 +104,7 @@ class JaxsimSimulator(Simulator):
         self.recorder = jaxsim.mujoco.MujocoVideoRecorder(
             model=self.mj_model_helper.model,
             data=self.mj_model_helper.data,
-            fps=50,
+            fps=30,
         )
 
     def get_feet_wrench(self) -> npt.ArrayLike:
@@ -130,6 +133,20 @@ class JaxsimSimulator(Simulator):
                     joint_forces=torques,
                     link_forces=None,  # f
                 )
+
+                current_time_ns = np.array(object=self.data.time_ns).astype(int)
+                if current_time_ns - self.last_recorded_t_ns >= int(
+                    1e9 / self.recorder.fps
+                ):
+                    self.record_frame()
+                    self.last_recorded_t_ns = current_time_ns
+
+                if self.visualize_robot_flag and (
+                    current_time_ns - self.last_rendered_t_ns >= int(1e9 / self.viz_fps)
+                ):
+                    self.render()
+                    self.last_rendered_t_ns = current_time_ns
+
         except Exception as e:
             print(f"Exception in model.step:\n{e}")
         # finally:
@@ -140,9 +157,6 @@ class JaxsimSimulator(Simulator):
             data=self.data,
             joint_force_references=torques,
         )
-
-        if self.visualize_robot_flag:
-            self.render()
 
     def get_base(self) -> npt.ArrayLike:
         return np.array(self.data.base_transform())
