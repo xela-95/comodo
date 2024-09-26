@@ -146,6 +146,8 @@ s_js, ds_js, tau_js = js.get_state()
 t = 0.0
 H_b = js.get_base()
 w_b = js.get_base_velocity()
+
+# Specify if open an interactive window to visualize the robot during the simulation
 js.visualize_robot_flag = False
 
 print(f"Contact model in use: {js.model.contact_model}")
@@ -439,12 +441,14 @@ ax = axs[0]
 ax.title.set_text("Left foot sole height")
 ax.plot(t, W_p_lf_js[:, 2], label="Simulated")
 ax.plot(t, W_p_lf_sfp[:, 2], label="Swing Foot Planner reference")
+ax.legend()
 ax.grid()
 ax.set_ylabel("Height [m]")
 ax = axs[1]
 ax.title.set_text("Right foot sole height")
 ax.plot(t, W_p_rf_js[:, 2], label="Simulated")
 ax.plot(t, W_p_rf_sfp[:, 2], label="Swing Foot Planner reference")
+ax.legend()
 ax.grid()
 plt.show()
 
