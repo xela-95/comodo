@@ -1,0 +1,27 @@
+name: comodo
+channels:
+  - conda-forge
+dependencies:
+  - adam-robotics
+  - idyntree
+  - bipedal-locomotion-framework=0.16.0
+  - mujoco
+  - mujoco-python-viewer
+  - matplotlib
+  - urllib3
+  - urchin
+  - resolve-robotics-uri-py
+  - notebook
+  - ipykernel
+  - jax
+  - jaxlib
+  - jax-dataclasses
+  - jaxopt
+  - coloredlogs
+  - qpax
+  - rod
+  - mesalib
+  - pip
+  - pip:
+      - git+https://github.com/ami-iit/jaxsim.git
+      - git+https://github.com/CarlottaSartore/urdf-modifiers.git@scalar_modification
