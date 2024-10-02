@@ -16,13 +16,14 @@ from jaxsim.rbda.contacts.relaxed_rigid import (
     RelaxedRigidContacts,
     RelaxedRigidContactsParams,
 )
+from jaxsim.rbda.contacts.visco_elastic import ViscoElasticContacts
 import pathlib
 
 
 class JaxsimSimulator(Simulator):
 
     def __init__(self) -> None:
-        self.dt = 0.000_1
+        self.dt = 0.005
         self.tau = jnp.zeros(20)
         self.visualize_robot_flag = None
         self.viz = None
@@ -49,16 +50,16 @@ class JaxsimSimulator(Simulator):
         model = js.model.JaxSimModel.build_from_model_description(
             model_description=robot_model.urdf_string,
             model_name=robot_model.robot_name,
-            is_urdf=True,
             # contact_model=RigidContacts(
             #     parameters=RigidContactsParams(mu=0.5, K=1.0e4, D=1.0e2)
             # ),
-            contact_model=RelaxedRigidContacts(
-                parameters=RelaxedRigidContactsParams(
-                    mu=0.8,
-                    time_constant=0.005,
-                )
-            ),
+            # contact_model=RelaxedRigidContacts(
+            #     parameters=RelaxedRigidContactsParams(
+            #         mu=0.8,
+            #         time_constant=0.005,
+            #     )
+            # ),
+            contact_model=ViscoElasticContacts(),
         )
         model = js.model.reduce(
             model=model,
@@ -71,11 +72,11 @@ class JaxsimSimulator(Simulator):
             base_position=jnp.array(xyz_rpy[:3]),
             base_quaternion=jnp.array(self.RPY_to_quat(*xyz_rpy[3:])),
             joint_positions=jnp.array(s),
-            # contacts_params=js.contact.estimate_good_soft_contacts_parameters(
-            #     model=model,
-            #     number_of_active_collidable_points_steady_state=8,
-            #     max_penetration=0.001,
-            # ),
+            contacts_params=js.contact.estimate_good_soft_contacts_parameters(
+                model=model,
+                number_of_active_collidable_points_steady_state=8,
+                max_penetration=0.001,
+            ),
         )
 
         self.integrator = integrators.fixed_step.RungeKutta4.build(
@@ -135,33 +136,32 @@ class JaxsimSimulator(Simulator):
         if torques is None:
             torques = np.zeros(20)
 
-        try:
-            for _ in range(n_step):
-                self.data, self.integrator_state = js.model.step(
-                    model=self.model,
-                    data=self.data,
-                    dt=self.dt,
-                    integrator=self.integrator,
-                    integrator_state=self.integrator_state,
-                    joint_forces=torques,
-                    link_forces=None,  # f
-                )
+        # try:
+        for _ in range(n_step):
+            self.data, self.integrator_state = jaxsim.rbda.contacts.visco_elastic.step(
+                model=self.model,
+                data=self.data,
+                dt=self.dt,
+                joint_forces=torques,
+                link_forces=None,  # f
+            )
 
-                current_time_ns = np.array(object=self.data.time_ns).astype(int)
-                if current_time_ns - self.last_recorded_t_ns >= int(
-                    1e9 / self.recorder.fps
-                ):
-                    self.record_frame()
-                    self.last_recorded_t_ns = current_time_ns
+            current_time_ns = np.array(object=self.data.time_ns).astype(int)
+            if current_time_ns - self.last_recorded_t_ns >= int(
+                1e9 / self.recorder.fps
+            ):
+                self.record_frame()
+                self.last_recorded_t_ns = current_time_ns
 
-                if self.visualize_robot_flag and (
-                    current_time_ns - self.last_rendered_t_ns >= int(1e9 / self.viz_fps)
-                ):
-                    self.render()
-                    self.last_rendered_t_ns = current_time_ns
+            if self.visualize_robot_flag and (
+                current_time_ns - self.last_rendered_t_ns >= int(1e9 / self.viz_fps)
+            ):
+                self.render()
+                self.last_rendered_t_ns = current_time_ns
 
-        except Exception as e:
-            print(f"Exception in model.step:\n{e}")
+        # except Exception as e:
+        #     print(f"Exception in model.step:\n{e}")
+        #     raise e
         # finally:
         #     self.save_video(pathlib.Path("exception_video.mp4"))
 
