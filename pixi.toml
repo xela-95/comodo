@@ -23,10 +23,10 @@ notebook = "*"
 rod = "*"
 ipykernel = "*"
 mesalib = "*"
+optuna = ">=4.0.0,<5"
 # jaxsim = ">=0.4.2"
 
 [pypi-dependencies]
-# jaxsim = {version = "==0.4.3.dev129", extras = ["all"]}
-jaxsim = { git = "https://github.com/ami-iit/jaxsim.git", rev="main", extras = ["all"]}
+jaxsim = { git = "https://github.com/ami-iit/jaxsim.git", rev="visco_elastic_contacts", extras = ["all"]}
 urdfmodifiers = { git = "https://github.com/CarlottaSartore/urdf-modifiers.git", rev="scalar_modification"}
 comodo ={ path = "./", editable = true}
