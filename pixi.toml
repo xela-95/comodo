@@ -9,6 +9,10 @@ repository = "https://github.com/ami-iit/comodo"
 readme = "README.md"
 license-file = "LICENSE"
 
+[activation]
+# To avoid issue with git-lfs, see https://github.com/prefix-dev/pixi/issues/2000
+env = { GIT_LFS_SKIP_SMUDGE = "1" }
+
 [dependencies]
 adam-robotics = "*"
 idyntree = "*"
