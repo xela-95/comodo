@@ -23,7 +23,7 @@ import pathlib
 class JaxsimSimulator(Simulator):
 
     def __init__(self) -> None:
-        self.dt = 0.005
+        self.dt = 0.000_5
         self.tau = jnp.zeros(20)
         self.visualize_robot_flag = None
         self.viz = None
@@ -59,7 +59,7 @@ class JaxsimSimulator(Simulator):
             #         time_constant=0.005,
             #     )
             # ),
-            contact_model=ViscoElasticContacts(),
+            # contact_model=ViscoElasticContacts(),
         )
         model = js.model.reduce(
             model=model,
@@ -74,8 +74,8 @@ class JaxsimSimulator(Simulator):
             joint_positions=jnp.array(s),
             contacts_params=js.contact.estimate_good_soft_contacts_parameters(
                 model=model,
-                number_of_active_collidable_points_steady_state=8,
-                max_penetration=0.001,
+                number_of_active_collidable_points_steady_state=16,
+                max_penetration=0.002,
             ),
         )
 
@@ -106,6 +106,11 @@ class JaxsimSimulator(Simulator):
         self.right_footsole_frame_idx = js.frame.name_to_idx(
             model=self.model, frame_name="r_sole"
         )
+
+        logging.info(f"Left foot link index: {self.left_foot_link_idx}")
+        logging.info(f"Right foot link index: {self.right_foot_link_idx}")
+        logging.info(f"Left foot sole frame index: {self.left_footsole_frame_idx}")
+        logging.info(f"Right foot sole frame index: {self.right_footsole_frame_idx}")
 
         mjcf_string, assets = UrdfToMjcf.convert(
             urdf=self.model.built_from,
@@ -138,10 +143,19 @@ class JaxsimSimulator(Simulator):
 
         # try:
         for _ in range(n_step):
-            self.data, self.integrator_state = jaxsim.rbda.contacts.visco_elastic.step(
+            # self.data, self.integrator_state = jaxsim.rbda.contacts.visco_elastic.step(
+            #     model=self.model,
+            #     data=self.data,
+            #     dt=self.dt,
+            #     joint_forces=torques,
+            #     link_forces=None,  # f
+            # )
+            self.data, self.integrator_state = js.model.step(
                 model=self.model,
                 data=self.data,
                 dt=self.dt,
+                integrator=self.integrator,
+                integrator_state=self.integrator_state,
                 joint_forces=torques,
                 link_forces=None,  # f
             )
@@ -273,12 +287,18 @@ class JaxsimSimulator(Simulator):
         self.recorder.write_video(path=file_path)
 
     def set_terrain_parameters(self, terrain_params: npt.ArrayLike) -> None:
-        terrain_params_dict = dict(zip(["K", "D", "mu"], terrain_params))
+        terrain_params_dict = dict(
+            zip(["max_penetration", "damping_ratio", "mu"], terrain_params)
+        )
 
         logging.warning(f"Setting terrain parameters: {terrain_params_dict}")
 
-        self.data = self.data.replace(
-            soft_contacts_params=jaxsim.rbda.SoftContactsParams.build(
-                **terrain_params_dict
-            )
+        contact_params = js.contact.estimate_good_soft_contacts_parameters(
+            model=self.model,
+            number_of_active_collidable_points_steady_state=16,
+            max_penetration=terrain_params_dict["max_penetration"],
+            damping_ratio=terrain_params_dict["damping_ratio"],
+            static_friction_coefficient=terrain_params_dict["mu"],
         )
+
+        self.data = self.data.replace(contacts_params=contact_params)
