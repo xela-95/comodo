@@ -14,12 +14,15 @@ license-file = "LICENSE"
 env = { GIT_LFS_SKIP_SMUDGE = "1" }
 
 [dependencies]
-adam-robotics = "*"
+# bipedal-locomotion-framework and manifpy have pinned build dependencies
+# due to https://github.com/ami-iit/bipedal-locomotion-framework/issues/885
+bipedal-locomotion-framework = { version = "==0.18.0", build = "ha770c72_15" }
+manifpy = { version = "==0.0.5", build = "py310hf5d888b_0" }
 idyntree = "*"
-bipedal-locomotion-framework = "*"
+adam-robotics = "*"
 mujoco = "*"
 mujoco-python-viewer = "*"
-matplotlib = "*"
+matplotlib = ">=3.9.2,<4"
 urllib3 = "*"
 urchin = "*"
 resolve-robotics-uri-py = "*"
@@ -28,9 +31,16 @@ rod = "*"
 ipykernel = "*"
 mesalib = "*"
 optuna = ">=4.0.0,<5"
+cmaes = ">=0.11.1,<0.12"
+plotly = ">=5.24.1,<6"
+casadi = "<=3.6.6"
+nbformat = ">=5.10.4,<6"
+python-kaleido = ">=0.2.1,<0.3"
+scikit-learn = ">=1.5.2,<2"
 # jaxsim = ">=0.4.2"
 
 [pypi-dependencies]
-jaxsim = { git = "https://github.com/ami-iit/jaxsim.git", rev="visco_elastic_contacts", extras = ["all"]}
-urdfmodifiers = { git = "https://github.com/CarlottaSartore/urdf-modifiers.git", rev="scalar_modification"}
-comodo ={ path = "./", editable = true}
+# jaxsim = { git = "https://github.com/ami-iit/jaxsim.git", rev="visco_elastic_contacts", extras = ["all"]}
+jaxsim = { path = "../jaxsim", extras = ["all"] }
+urdfmodifiers = { git = "https://github.com/CarlottaSartore/urdf-modifiers.git", rev = "scalar_modification" }
+comodo = { path = "./", editable = true }
