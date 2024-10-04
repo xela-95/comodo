@@ -1,31 +1,32 @@
 import logging
-from typing import Union
 import math
-import jaxsim
+import pathlib
+from typing import Union
+
 import jax.numpy as jnp
+import jaxsim
 import jaxsim.api as js
 import numpy as np
 import numpy.typing as npt
-from comodo.abstractClasses.simulator import Simulator
 from jaxsim import VelRepr, integrators
-from jaxsim.mujoco.visualizer import MujocoVisualizer
-from jaxsim.mujoco.model import MujocoModelHelper
 from jaxsim.mujoco.loaders import UrdfToMjcf
-from jaxsim.rbda.contacts.rigid import RigidContacts, RigidContactsParams
+from jaxsim.mujoco.model import MujocoModelHelper
+from jaxsim.mujoco.visualizer import MujocoVisualizer
 from jaxsim.rbda.contacts.relaxed_rigid import (
     RelaxedRigidContacts,
     RelaxedRigidContactsParams,
 )
+from jaxsim.rbda.contacts.rigid import RigidContacts, RigidContactsParams
 from jaxsim.rbda.contacts.visco_elastic import ViscoElasticContacts
-import pathlib
+
+from comodo.abstractClasses.simulator import Simulator
 
 
 class JaxsimSimulator(Simulator):
-
     def __init__(self) -> None:
         self.dt = 0.000_5
         self.tau = jnp.zeros(20)
-        self.visualize_robot_flag = None
+        self.visualization_mode = None
         self.viz = None
         self.recorder = None
         self.link_contact_forces = None
@@ -34,7 +35,6 @@ class JaxsimSimulator(Simulator):
         self.left_footsole_frame_idx = None
         self.right_footsole_frame_idx = None
         self.viz_fps = 10
-        self.last_recorded_t_ns = 0.0
         self.last_rendered_t_ns = 0.0
 
     def load_model(
@@ -112,19 +112,26 @@ class JaxsimSimulator(Simulator):
         logging.info(f"Left foot sole frame index: {self.left_footsole_frame_idx}")
         logging.info(f"Right foot sole frame index: {self.right_footsole_frame_idx}")
 
-        mjcf_string, assets = UrdfToMjcf.convert(
-            urdf=self.model.built_from,
-        )
+        if self.visualization_mode is not None:
+            if self.visualization_mode not in ["record", "interactive"]:
+                raise ValueError(
+                    f"Invalid visualization mode: {self.visualization_mode}. "
+                    f"Valid options are: 'record', 'interactive'"
+                )
 
-        self.mj_model_helper = MujocoModelHelper.build_from_xml(
-            mjcf_description=mjcf_string, assets=assets
-        )
+            mjcf_string, assets = UrdfToMjcf.convert(
+                urdf=self.model.built_from,
+            )
 
-        self.recorder = jaxsim.mujoco.MujocoVideoRecorder(
-            model=self.mj_model_helper.model,
-            data=self.mj_model_helper.data,
-            fps=30,
-        )
+            self.mj_model_helper = MujocoModelHelper.build_from_xml(
+                mjcf_description=mjcf_string, assets=assets
+            )
+
+            self.recorder = jaxsim.mujoco.MujocoVideoRecorder(
+                model=self.mj_model_helper.model,
+                data=self.mj_model_helper.data,
+                fps=30,
+            )
 
     def get_feet_wrench(self) -> npt.ArrayLike:
         wrenches = self.get_link_contact_forces()
@@ -137,11 +144,9 @@ class JaxsimSimulator(Simulator):
         self.tau = jnp.array(input)
 
     def step(self, torques: np.ndarray = None, n_step: int = 1) -> None:
-
         if torques is None:
             torques = np.zeros(20)
 
-        # try:
         for _ in range(n_step):
             # self.data, self.integrator_state = jaxsim.rbda.contacts.visco_elastic.step(
             #     model=self.model,
@@ -161,23 +166,23 @@ class JaxsimSimulator(Simulator):
             )
 
             current_time_ns = np.array(object=self.data.time_ns).astype(int)
-            if current_time_ns - self.last_recorded_t_ns >= int(
-                1e9 / self.recorder.fps
-            ):
-                self.record_frame()
-                self.last_recorded_t_ns = current_time_ns
 
-            if self.visualize_robot_flag and (
-                current_time_ns - self.last_rendered_t_ns >= int(1e9 / self.viz_fps)
-            ):
-                self.render()
-                self.last_rendered_t_ns = current_time_ns
+            match self.visualization_mode:
+                case "record":
+                    if current_time_ns - self.last_rendered_t_ns >= int(
+                        1e9 / self.recorder.fps
+                    ):
+                        self.record_frame()
+                        self.last_rendered_t_ns = current_time_ns
 
-        # except Exception as e:
-        #     print(f"Exception in model.step:\n{e}")
-        #     raise e
-        # finally:
-        #     self.save_video(pathlib.Path("exception_video.mp4"))
+                case "interactive":
+                    if current_time_ns - self.last_rendered_t_ns >= int(
+                        1e9 / self.viz_fps
+                    ):
+                        self.render()
+                        self.last_rendered_t_ns = current_time_ns
+                case None:
+                    pass
 
         self.link_contact_forces = js.model.link_contact_forces(
             model=self.model,
