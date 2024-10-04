@@ -3,29 +3,33 @@
 # %%
 # ==== Imports ====
 
+import os
+import pathlib
+import pickle
+import tempfile
+import traceback
+import urllib.request
+import xml.etree.ElementTree as ET
+from datetime import datetime
 from pathlib import Path
+
+import jax
+import jax.numpy as jnp
+import numpy as np
 import optuna
 from optuna.trial import TrialState
-import xml.etree.ElementTree as ET
-import numpy as np
-import tempfile
-import urllib.request
-import jax.numpy as jnp
-import os
 from rich import logging
-import traceback
-import jax
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 os.environ["XLA_PYTHON_CLIENT_MEM_PREALLOCATE"] = "False"
 
-from comodo.robotModel.createUrdf import createUrdf
-from comodo.jaxsimSimulator import JaxsimSimulator
-from comodo.robotModel.robotModel import RobotModel
 from comodo.centroidalMPC.centroidalMPC import CentroidalMPC
 from comodo.centroidalMPC.mpcParameterTuning import MPCParameterTuning
-from comodo.TSIDController.TSIDParameterTuning import TSIDParameterTuning
+from comodo.jaxsimSimulator import JaxsimSimulator
+from comodo.robotModel.createUrdf import createUrdf
+from comodo.robotModel.robotModel import RobotModel
 from comodo.TSIDController.TSIDController import TSIDController
+from comodo.TSIDController.TSIDParameterTuning import TSIDParameterTuning
 
 # %%
 # ==== Define functions ====
@@ -104,7 +108,18 @@ def init():
     urdf_robot_string = create_urdf_instance.write_urdf_to_file()
     robot_model_init = RobotModel(urdf_robot_string, "stickBot", mj_joint_names)
 
-    s_0, xyz_rpy_0, H_b_0 = robot_model_init.compute_desired_position_walking()
+    # Load initial robot configuration obtained by running robot_model_init.compute_desired_position_walking()
+    with open(
+        os.path.join(
+            os.path.dirname(__file__), "stickbot_desired_position_walking.pkl"
+        ),
+        "rb",
+    ) as f:
+        result_dict = pickle.load(f)
+
+    s_0 = result_dict["s_0"]
+    xyz_rpy_0 = result_dict["xyz_rpy_0"]
+    H_b_0 = result_dict["H_b_0"]
     print(
         f"Initial configuration:\nBase position: {xyz_rpy_0[:3]}\nBase orientation: {xyz_rpy_0[3:]}\nJoint positions: {s_0}"
     )
@@ -138,30 +153,46 @@ def plot_study(study: optuna.Study):
         directory.mkdir(parents=True, exist_ok=True)
 
     repo_root = get_repo_root()
-    plots_dir = repo_root / "plots"
+    now = datetime.now()
+    current_time = now.strftime("%Y-%m-%d_%H-%M-%S")
+    plots_dir = repo_root / "examples" / "plots" / current_time
 
     # Create the results directory if it doesn't exist
     create_output_dir(plots_dir)
 
+
     # Plot the optimization history
     optuna.visualization.plot_optimization_history(study).write_image(
-        "./plots/optimization_history.png"
+        plots_dir / "optimization_history.png"
     )
 
     # Plot the parallel coordinate
     optuna.visualization.plot_parallel_coordinate(study).write_image(
-        "./plots/parallel_coordinate.png"
+        plots_dir / "parallel_coordinate.png"
     )
 
     # Plot the parameter importance
     optuna.visualization.plot_param_importances(study).write_image(
-        "./plots/param_importance.png"
+        plots_dir / "param_importance.png"
     )
+
+    # Plot the slices of the hyperparameters
+    optuna.visualization.plot_slice(study).write_image(plots_dir / "slice.png")
+
+    # Plot the contour of the hyperparameters
+    optuna.visualization.plot_contour(
+        study, params=["max_penetration", "mu"]
+    ).write_image(plots_dir / "contour.png")
+
+    # Plot the timeline of trials
+    optuna.visualization.plot_timeline(study).write_image(plots_dir / "timeline.png")
 
     # Plot loss distributions
     optuna.visualization.plot_intermediate_values(study).write_image(
-        "./plots/intermediate_values.png"
+        plots_dir / "intermediate_values.png"
     )
+
+    print(f"Plots saved in {plots_dir}")
 
 
 def simulate(
