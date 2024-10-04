@@ -398,7 +398,7 @@ def objective(trial: optuna.Trial) -> float:
         w_b = js.get_base_velocity()
 
         # Specify if open an interactive window to visualize the robot during the simulation
-        js.visualize_robot_flag = False
+        js.visualization_mode = None
 
         # Controller Parameters
         tsid_parameter = TSIDParameterTuning()
