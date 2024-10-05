@@ -219,21 +219,21 @@ def simulate(
     # - dcom: center of mass velocity
 
     # Logging
-    s_js_log = []
-    ds_js_log = []
-    W_p_CoM_js_log = []
-    W_p_lf_js_log = []
-    W_p_rf_js_log = []
-    W_p_CoM_mpc_log = []
-    W_p_lf_sfp_log = []
-    W_p_rf_sfp_log = []
-    f_lf_mpc_log = []
-    f_rf_mpc_log = []
-    f_lf_js_log = []
-    f_rf_js_log = []
-    tau_tsid_log = []
-    W_p_CoM_tsid_log = []
-    t_log = []
+    # s_js_log = []
+    # ds_js_log = []
+    # W_p_CoM_js_log = []
+    # W_p_lf_js_log = []
+    # W_p_rf_js_log = []
+    # W_p_CoM_mpc_log = []
+    # W_p_lf_sfp_log = []
+    # W_p_rf_sfp_log = []
+    # f_lf_mpc_log = []
+    # f_rf_mpc_log = []
+    # f_lf_js_log = []
+    # f_rf_js_log = []
+    # tau_tsid_log = []
+    # W_p_CoM_tsid_log = []
+    # t_log = []
 
     # Define number of steps
     n_step_tsid_js = int(tsid.frequency / js.dt)
@@ -276,7 +276,7 @@ def simulate(
         com_mpc, dcom_mpc, f_lf_mpc, f_rf_mpc, ang_mom_mpc = mpc.get_references()
         lf_sfp, rf_sfp = mpc.contact_planner.get_references_swing_foot_planner()
 
-        f_lf_js, f_rf_js = js.get_feet_wrench()
+        # f_lf_js, f_rf_js = js.get_feet_wrench()
 
         tsid.compute_com_position()
 
@@ -320,22 +320,22 @@ def simulate(
 
         # Log data
         # TODO transform mpc contact forces to wrenches to be compared with jaxsim ones
-        t_log.append(t)
-        tau_tsid_log.append(tau_tsid)
-        s_js_log.append(s_js)
-        ds_js_log.append(ds_js)
-        W_p_CoM_js_log.append(js.get_com_position())
-        W_p_lf_js, W_p_rf_js = js.get_feet_positions()
-        W_p_lf_js_log.append(W_p_lf_js)
-        W_p_rf_js_log.append(W_p_rf_js)
-        f_lf_js_log.append(f_lf_js)
-        f_rf_js_log.append(f_rf_js)
-        W_p_CoM_mpc_log.append(com_mpc)
-        f_lf_mpc_log.append(f_lf_mpc)
-        f_rf_mpc_log.append(f_rf_mpc)
-        W_p_lf_sfp_log.append(lf_sfp.transform.translation())
-        W_p_rf_sfp_log.append(rf_sfp.transform.translation())
-        W_p_CoM_tsid_log.append(tsid.COM.toNumPy())
+        # t_log.append(t)
+        # tau_tsid_log.append(tau_tsid)
+        # s_js_log.append(s_js)
+        # ds_js_log.append(ds_js)
+        # W_p_CoM_js_log.append(js.get_com_position())
+        # W_p_lf_js, W_p_rf_js = js.get_feet_positions()
+        # W_p_lf_js_log.append(W_p_lf_js)
+        # W_p_rf_js_log.append(W_p_rf_js)
+        # f_lf_js_log.append(f_lf_js)
+        # f_rf_js_log.append(f_rf_js)
+        # W_p_CoM_mpc_log.append(com_mpc)
+        # f_lf_mpc_log.append(f_lf_mpc)
+        # f_rf_mpc_log.append(f_rf_mpc)
+        # W_p_lf_sfp_log.append(lf_sfp.transform.translation())
+        # W_p_rf_sfp_log.append(rf_sfp.transform.translation())
+        # W_p_CoM_tsid_log.append(tsid.COM.toNumPy())
 
         # Get a score on the controller and choose to prune the trial if it is not good
         # obj = 0.0
@@ -364,6 +364,11 @@ def objective(trial: optuna.Trial) -> float:
 
     # Setup the simulation
 
+    # Define simulator and set initial position
+    # global js
+    js = JaxsimSimulator()
+    js.load_model(robot_model_init, s=s_0[to_js], xyz_rpy=xyz_rpy_0)
+
     # s_0, xyz_rpy_0, H_b_0 = robot_model_init.compute_desired_position_walking()
 
     print(
@@ -376,22 +381,23 @@ def objective(trial: optuna.Trial) -> float:
         js.set_terrain_parameters(TERRAIN_PARAMETERS)
 
         # Reset simulation state
-        js.data = js.data.reset_base_position(
-            base_position=jnp.array(xyz_rpy_0[:3]),
-        )
-        js.data = js.data.reset_base_quaternion(
-            base_quaternion=jnp.array(js.RPY_to_quat(*xyz_rpy_0[3:])),
-        )
-        js.data = js.data.reset_joint_positions(
-            positions=jnp.array(s_0),
-        )
-        js.data = js.data.reset_joint_velocities(
-            velocities=jnp.zeros_like(s_0),
-        )
-        js.data = js.data.reset_base_velocity(
-            base_velocity=jnp.zeros(6),
-        )
+        # js.data = js.data.reset_base_position(
+        #     base_position=jnp.array(xyz_rpy_0[:3]),
+        # )
+        # js.data = js.data.reset_base_quaternion(
+        #     base_quaternion=jnp.array(js.RPY_to_quat(*xyz_rpy_0[3:])),
+        # )
+        # js.data = js.data.reset_joint_positions(
+        #     positions=jnp.array(s_0),
+        # )
+        # js.data = js.data.reset_joint_velocities(
+        #     velocities=jnp.zeros_like(s_0),
+        # )
+        # js.data = js.data.reset_base_velocity(
+        #     base_velocity=jnp.zeros(6),
+        # )
 
+        js.step()
         s_js, ds_js, tau_js = js.get_state()
         t = 0.0
         H_b = js.get_base()
