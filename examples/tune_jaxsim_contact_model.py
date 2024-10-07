@@ -20,8 +20,14 @@ import optuna
 from optuna.trial import TrialState
 from rich import logging
 
+# Run only on CPU
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 os.environ["XLA_PYTHON_CLIENT_MEM_PREALLOCATE"] = "False"
+# Flag to disable JAX JIT compilation
+# os.environ["JAX_DISABLE_JIT"] = "True"
+# Flag to solve MUMPS hanging
+os.environ["OMP_NUM_THREADS"] = "1"
+
 
 from comodo.centroidalMPC.centroidalMPC import CentroidalMPC
 from comodo.centroidalMPC.mpcParameterTuning import MPCParameterTuning
