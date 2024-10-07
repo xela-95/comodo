@@ -205,7 +205,15 @@ def plot_study(study: optuna.Study):
     # Plot the contour of the hyperparameters
     optuna.visualization.plot_contour(
         study, params=["max_penetration", "mu"]
-    ).write_image(plots_dir / "contour.png")
+    ).write_image(plots_dir / "contour_1.png")
+
+    optuna.visualization.plot_contour(
+        study, params=["max_penetration", "damping_ratio"]
+    ).write_image(plots_dir / "contour_2.png")
+
+    optuna.visualization.plot_contour(
+        study, params=["mu", "damping_ratio"]
+    ).write_image(plots_dir / "contour_3.png")
 
     # Plot the timeline of trials
     optuna.visualization.plot_timeline(study).write_image(plots_dir / "timeline.png")
@@ -377,8 +385,8 @@ def simulate(
 def objective(trial: optuna.Trial) -> float:
     # Define the parameters to optimize and get the values for the trial
     max_penetration = trial.suggest_float("max_penetration", 1e-4, 1e-2)
-    # damping_ratio = trial.suggest_float("damping_ratio", 0.001, 10)
-    damping_ratio = 1.0
+    damping_ratio = trial.suggest_float("damping_ratio", 0.1, 2)
+    # damping_ratio = 1.0
     mu = trial.suggest_float("mu", 0.25, 1.5)
 
     TERRAIN_PARAMETERS = (max_penetration, damping_ratio, mu)
