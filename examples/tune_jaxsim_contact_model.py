@@ -18,7 +18,7 @@ import jax.numpy as jnp
 import numpy as np
 import optuna
 from optuna.trial import TrialState
-from rich import logging
+import logging
 
 # Run only on CPU
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
@@ -37,9 +37,26 @@ from comodo.robotModel.robotModel import RobotModel
 from comodo.TSIDController.TSIDController import TSIDController
 from comodo.TSIDController.TSIDParameterTuning import TSIDParameterTuning
 
+# Logger setup
+logger = logging.getLogger("tune_jaxsim_contact_model")
+logger.setLevel(logging.DEBUG)
+
+# Remove default handlers if any
+if logger.hasHandlers():
+    logger.handlers.clear()
+logger.propagate = False
+
+# Console handler
+console_handler = logging.StreamHandler()
+formatter = logging.Formatter(
+    "[%(asctime)-19s.%(msecs)03d] [%(levelname)-8s] [TID %(thread)-5d] - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
+
 # %%
 # ==== Define functions ====
-
 
 def init():
     jax.config.update("jax_platform_name", "cpu")
@@ -126,7 +143,7 @@ def init():
     s_0 = result_dict["s_0"]
     xyz_rpy_0 = result_dict["xyz_rpy_0"]
     H_b_0 = result_dict["H_b_0"]
-    print(
+    logger.info(
         f"Initial configuration:\nBase position: {xyz_rpy_0[:3]}\nBase orientation: {xyz_rpy_0[3:]}\nJoint positions: {s_0}"
     )
 
@@ -134,10 +151,10 @@ def init():
     js = JaxsimSimulator()
     js.load_model(robot_model_init, s=s_0[to_js], xyz_rpy=xyz_rpy_0)
 
-    print(f"Contact model in use: {js.model.contact_model}")
-    print(f"Link names:\n{js.model.link_names()}")
-    print(f"Frame names:\n{js.model.frame_names()}")
-    print(f"Mass: {js.total_mass()*js.data.standard_gravity()} N")
+    logger.info(f"Contact model in use: {js.model.contact_model}")
+    logger.info(f"Link names:\n{js.model.link_names()}")
+    logger.info(f"Frame names:\n{js.model.frame_names()}")
+    logger.info(f"Mass: {js.total_mass()*js.data.standard_gravity()} N")
 
     s_js, ds_js, tau_js = js.get_state()
     return (js, s_0, xyz_rpy_0, H_b_0, robot_model_init, js_joint_names, to_mj, to_js)
@@ -198,7 +215,7 @@ def plot_study(study: optuna.Study):
         plots_dir / "intermediate_values.png"
     )
 
-    print(f"Plots saved in {plots_dir}")
+    logger.info(f"Plots saved in {plots_dir}")
 
 
 def simulate(
@@ -244,7 +261,7 @@ def simulate(
     # Define number of steps
     n_step_tsid_js = int(tsid.frequency / js.dt)
     n_step_mpc_tsid = int(mpc.get_frequency_seconds() / tsid.frequency)
-    print(f"{n_step_mpc_tsid=}, {n_step_tsid_js=}")
+    logger.debug(f"{n_step_mpc_tsid=}, {n_step_tsid_js=}")
     counter = 0
     mpc_success = True
     succeded_controller = True
@@ -253,7 +270,7 @@ def simulate(
     obj = 0.0
 
     while t < T:
-        print(f"==== Time: {t:.4f}s ====", flush=True, end="\r")
+        # logger.debug(f"==== Time: {t:.4f}s ====")
 
         # Reading robot state from simulator
         s_js, ds_js, tau_js = js.get_state()
@@ -275,7 +292,7 @@ def simulate(
             mpc_success = mpc.plan_trajectory()
             mpc.contact_planner.advance_swing_foot_planner()
             if not (mpc_success):
-                print("MPC failed")
+                logger.error("MPC failed")
                 break
 
         # Reading new references
@@ -302,7 +319,7 @@ def simulate(
         succeded_controller = tsid.run()
 
         if not (succeded_controller):
-            print("Controller failed")
+            logger.error("Controller failed")
             break
 
         tau_tsid = tsid.get_torque()
@@ -316,12 +333,12 @@ def simulate(
 
         # Stop the simulation if the robot fell down
         if js.data.base_position()[2] < 0.5:
-            print(f"Robot fell down at t={t:.4f}s.")
+            logger.error(f"Robot fell down at t={t:.4f}s.")
             break
 
         # Stop the simulation if the controller failed
         if not (succeded_controller):
-            print("Controller failed")
+            logger.error("Controller failed")
             break
 
         # Log data
@@ -350,7 +367,8 @@ def simulate(
         # if trial.should_prune():
         #     raise optuna.TrialPruned()
 
-        obj = t / T
+    logger.debug(f"Simulation ended at time {t:.4f}s")
+    obj = t / T
 
     return obj
 
@@ -364,7 +382,7 @@ def objective(trial: optuna.Trial) -> float:
 
     TERRAIN_PARAMETERS = (max_penetration, damping_ratio, mu)
 
-    print(
+    logger.info(
         f"Terrain parameters: max_penetration={max_penetration}, damping_ratio={damping_ratio}, mu={mu}"
     )
 
@@ -377,7 +395,7 @@ def objective(trial: optuna.Trial) -> float:
 
     # s_0, xyz_rpy_0, H_b_0 = robot_model_init.compute_desired_position_walking()
 
-    print(
+    logger.info(
         f"Initial configuration:\nBase position: {xyz_rpy_0[:3]}\nBase orientation: {xyz_rpy_0[3:]}\nJoint positions: {s_0}"
     )
 
@@ -448,13 +466,14 @@ def objective(trial: optuna.Trial) -> float:
             T=T, js=js, tsid=tsid, mpc=mpc, to_mj=to_mj, to_js=to_js, s_ref=s_0
         )
     except Exception as e:
-        print(f"Exception in model.step:\n{e}")
+        logger.error(f"Exception in model.step:\n{e}")
         traceback.print_exc()
 
     return obj
 
 
 if __name__ == "__main__":
+    # Argument parsing
     import argparse
 
     parser = argparse.ArgumentParser()
@@ -479,17 +498,17 @@ if __name__ == "__main__":
     pruned_trials = study.get_trials(deepcopy=False, states=[TrialState.PRUNED])
     complete_trials = study.get_trials(deepcopy=False, states=[TrialState.COMPLETE])
 
-    print("Study statistics: ")
-    print("  Number of finished trials: ", len(study.trials))
-    print("  Number of pruned trials: ", len(pruned_trials))
-    print("  Number of complete trials: ", len(complete_trials))
+    logger.info("Study statistics: ")
+    logger.info(f"  Number of finished trials: {len(study.trials)}")
+    logger.info(f"  Number of pruned trials: {len(pruned_trials)}")
+    logger.info(f"  Number of complete trials: {len(complete_trials)}")
 
-    print("Best trial:")
+    logger.info("Best trial:")
     trial = study.best_trial
-    print("  Value: ", trial.value)
+    logger.info(f"  Value: {trial.value}")
 
-    print("  Params: ")
+    logger.info("  Params: ")
     for key, value in trial.params.items():
-        print("    {}: {}".format(key, value))
+        logger.info(f"    {key}: {value}")
 
     plot_study(study=study)
