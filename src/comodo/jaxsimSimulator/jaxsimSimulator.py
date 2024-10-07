@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 import math
 import pathlib
@@ -24,7 +26,7 @@ from comodo.abstractClasses.simulator import Simulator
 
 class JaxsimSimulator(Simulator):
     def __init__(self) -> None:
-        self.dt = 0.000_5
+        self.dt = 0.001
         self.tau = jnp.zeros(20)
         self.visualization_mode = None
         self.viz = None
@@ -59,7 +61,7 @@ class JaxsimSimulator(Simulator):
             #         time_constant=0.005,
             #     )
             # ),
-            # contact_model=ViscoElasticContacts(),
+            contact_model=ViscoElasticContacts(),
         )
         model = js.model.reduce(
             model=model,
@@ -148,22 +150,22 @@ class JaxsimSimulator(Simulator):
             torques = np.zeros(20)
 
         for _ in range(n_step):
-            # self.data, self.integrator_state = jaxsim.rbda.contacts.visco_elastic.step(
-            #     model=self.model,
-            #     data=self.data,
-            #     dt=self.dt,
-            #     joint_forces=torques,
-            #     link_forces=None,  # f
-            # )
-            self.data, self.integrator_state = js.model.step(
+            self.data, self.integrator_state = jaxsim.rbda.contacts.visco_elastic.step(
                 model=self.model,
                 data=self.data,
                 dt=self.dt,
-                integrator=self.integrator,
-                integrator_state=self.integrator_state,
                 joint_forces=torques,
                 link_forces=None,  # f
             )
+            # self.data, self.integrator_state = js.model.step(
+            #     model=self.model,
+            #     data=self.data,
+            #     dt=self.dt,
+            #     integrator=self.integrator,
+            #     integrator_state=self.integrator_state,
+            #     joint_forces=torques,
+            #     link_forces=None,  # f
+            # )
 
             current_time_ns = np.array(object=self.data.time_ns).astype(int)
 
@@ -198,6 +200,10 @@ class JaxsimSimulator(Simulator):
 
     def get_simulation_time(self) -> float:
         return self.data.time()
+
+    def reset_simulation_time(self) -> None:
+        self.data = self.data.replace(time_ns=jnp.array(0, dtype=jnp.uint64))
+        assert self.data.time_ns == 0
 
     def get_state(self) -> Union[npt.ArrayLike, npt.ArrayLike, npt.ArrayLike]:
         s = np.array(self.data.joint_positions())
