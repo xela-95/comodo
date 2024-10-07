@@ -367,6 +367,7 @@ def simulate(
         # if trial.should_prune():
         #     raise optuna.TrialPruned()
 
+    t = js.get_simulation_time()
     logger.debug(f"Simulation ended at time {t:.4f}s")
     obj = t / T
 
@@ -389,9 +390,8 @@ def objective(trial: optuna.Trial) -> float:
     # Setup the simulation
 
     # Define simulator and set initial position
-    # global js
-    js = JaxsimSimulator()
-    js.load_model(robot_model_init, s=s_0[to_js], xyz_rpy=xyz_rpy_0)
+    # js = JaxsimSimulator()
+    # js.load_model(robot_model_init, s=s_0[to_js], xyz_rpy=xyz_rpy_0)
 
     # s_0, xyz_rpy_0, H_b_0 = robot_model_init.compute_desired_position_walking()
 
@@ -405,21 +405,22 @@ def objective(trial: optuna.Trial) -> float:
         js.set_terrain_parameters(TERRAIN_PARAMETERS)
 
         # Reset simulation state
-        # js.data = js.data.reset_base_position(
-        #     base_position=jnp.array(xyz_rpy_0[:3]),
-        # )
-        # js.data = js.data.reset_base_quaternion(
-        #     base_quaternion=jnp.array(js.RPY_to_quat(*xyz_rpy_0[3:])),
-        # )
-        # js.data = js.data.reset_joint_positions(
-        #     positions=jnp.array(s_0),
-        # )
-        # js.data = js.data.reset_joint_velocities(
-        #     velocities=jnp.zeros_like(s_0),
-        # )
-        # js.data = js.data.reset_base_velocity(
-        #     base_velocity=jnp.zeros(6),
-        # )
+        js.reset_simulation_time()
+        js.data = js.data.reset_base_position(
+            base_position=jnp.array(xyz_rpy_0[:3]),
+        )
+        js.data = js.data.reset_base_quaternion(
+            base_quaternion=jnp.array(js.RPY_to_quat(*xyz_rpy_0[3:])),
+        )
+        js.data = js.data.reset_joint_positions(
+            positions=jnp.array(s_0),
+        )
+        js.data = js.data.reset_joint_velocities(
+            velocities=jnp.zeros_like(s_0),
+        )
+        js.data = js.data.reset_base_velocity(
+            base_velocity=jnp.zeros(6),
+        )
 
         js.step()
         s_js, ds_js, tau_js = js.get_state()
@@ -449,9 +450,6 @@ def objective(trial: optuna.Trial) -> float:
         tsid.compute_com_position()
         mpc.define_test_com_traj(tsid.COM.toNumPy())
 
-        # Set initial robot state  and plan trajectories
-        js.step()
-
         # MPC
         mpc.set_state_with_base(
             s=s_js[to_mj], s_dot=ds_js[to_mj], H_b=H_b, w_b=w_b, t=t
@@ -459,7 +457,6 @@ def objective(trial: optuna.Trial) -> float:
         mpc.initialize_centroidal_integrator(
             s=s_js[to_mj], s_dot=ds_js[to_mj], H_b=H_b, w_b=w_b, t=t
         )
-        mpc_output = mpc.plan_trajectory()
 
         # Launch the simulation
         obj = simulate(
