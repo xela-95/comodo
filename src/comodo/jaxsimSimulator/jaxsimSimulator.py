@@ -81,17 +81,18 @@ class JaxsimSimulator(Simulator):
             ),
         )
 
-        self.integrator = integrators.fixed_step.RungeKutta4.build(
-            dynamics=js.ode.wrap_system_dynamics_for_integration(
-                model=model,
-                data=self.data,
-                system_dynamics=js.ode.system_dynamics,
-            ),
-        )
+        # Un comment to use non visco-elastic models
+        # self.integrator = integrators.fixed_step.RungeKutta4.build(
+        #     dynamics=js.ode.wrap_system_dynamics_for_integration(
+        #         model=model,
+        #         data=self.data,
+        #         system_dynamics=js.ode.system_dynamics,
+        #     ),
+        # )
 
-        self.integrator_state = self.integrator.init(
-            x0=self.data.state, t0=0, dt=self.dt
-        )
+        # self.integrator_state = self.integrator.init(
+        #     x0=self.data.state, t0=0, dt=self.dt
+        # )
 
         self.model = model
 
@@ -135,12 +136,12 @@ class JaxsimSimulator(Simulator):
                 fps=30,
             )
 
-    def get_feet_wrench(self) -> npt.ArrayLike:
-        wrenches = self.get_link_contact_forces()
+    # def get_feet_wrench(self) -> npt.ArrayLike:
+    #     wrenches = self.get_link_contact_forces()
 
-        left_foot = np.array(wrenches[self.left_foot_link_idx])
-        right_foot = np.array(wrenches[self.right_foot_link_idx])
-        return left_foot, right_foot
+    #     left_foot = np.array(wrenches[self.left_foot_link_idx])
+    #     right_foot = np.array(wrenches[self.right_foot_link_idx])
+    #     return left_foot, right_foot
 
     def set_input(self, input: npt.ArrayLike) -> None:
         self.tau = jnp.array(input)
@@ -150,13 +151,16 @@ class JaxsimSimulator(Simulator):
             torques = np.zeros(20)
 
         for _ in range(n_step):
-            self.data, self.integrator_state = jaxsim.rbda.contacts.visco_elastic.step(
+            # Comment this to use non visco-elastic models
+            self.data, _ = jaxsim.rbda.contacts.visco_elastic.step(
                 model=self.model,
                 data=self.data,
                 dt=self.dt,
-                joint_forces=torques,
-                link_forces=None,  # f
+                joint_force_references=torques,
+                link_forces=None,
             )
+
+            # Uncomment this to use non visco-elastic models
             # self.data, self.integrator_state = js.model.step(
             #     model=self.model,
             #     data=self.data,
@@ -186,11 +190,11 @@ class JaxsimSimulator(Simulator):
                 case None:
                     pass
 
-        self.link_contact_forces = js.model.link_contact_forces(
-            model=self.model,
-            data=self.data,
-            joint_force_references=torques,
-        )
+        # self.link_contact_forces = js.model.link_contact_forces(
+        #     model=self.model,
+        #     data=self.data,
+        #     joint_force_references=torques,
+        # )
 
     def get_base(self) -> npt.ArrayLike:
         return np.array(self.data.base_transform())
@@ -212,8 +216,8 @@ class JaxsimSimulator(Simulator):
 
         return s, s_dot, tau
 
-    def get_link_contact_forces(self) -> npt.ArrayLike:
-        return self.link_contact_forces
+    # def get_link_contact_forces(self) -> npt.ArrayLike:
+    #     return self.link_contact_forces
 
     def total_mass(self) -> float:
         return js.model.total_mass(self.model)
