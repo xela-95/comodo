@@ -13,10 +13,16 @@ import matplotlib.pyplot as plt
 import datetime
 import pathlib
 from pathlib import Path
+import traceback
 
 
+# Run only on CPU
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 os.environ["XLA_PYTHON_CLIENT_MEM_PREALLOCATE"] = "False"
+# Flag to disable JAX JIT compilation
+# os.environ["JAX_DISABLE_JIT"] = "True"
+# Flag to solve MUMPS hanging
+os.environ["OMP_NUM_THREADS"] = "1"
 
 from comodo.jaxsimSimulator import JaxsimSimulator
 from comodo.robotModel.robotModel import RobotModel
@@ -141,14 +147,13 @@ print(
 # ==== Define JaxSim simulator and set initial position ====
 
 js = JaxsimSimulator()
-js.load_model(robot_model_init, s=s_0[to_js], xyz_rpy=xyz_rpy_0)
+js.load_model(
+    robot_model_init, s=s_0[to_js], xyz_rpy=xyz_rpy_0, visualization_mode="record"
+)
 s_js, ds_js, tau_js = js.get_state()
 t = 0.0
 H_b = js.get_base()
 w_b = js.get_base_velocity()
-
-# Specify if open an interactive window to visualize the robot during the simulation
-js.visualize_robot_flag = False
 
 print(f"Contact model in use: {js.model.contact_model}")
 print(f"Link names:\n{js.model.link_names()}")
@@ -249,90 +254,96 @@ def simulate(
     t = 0.0
 
     while t < T:
-        print(f"==== Time: {t:.4f}s ====", flush=True, end="\r")
+        try:
+            print(f"==== Time: {t:.4f}s ====", flush=True, end="\r")
 
-        # Reading robot state from simulator
-        s_js, ds_js, tau_js = js.get_state()
-        H_b = js.get_base()
-        w_b = js.get_base_velocity()
-        t = js.get_simulation_time()
+            # Reading robot state from simulator
+            s_js, ds_js, tau_js = js.get_state()
+            H_b = js.get_base()
+            w_b = js.get_base_velocity()
+            t = js.get_simulation_time()
 
-        # Update TSID
-        tsid.set_state_with_base(
-            s=s_js[to_mj], s_dot=ds_js[to_mj], H_b=H_b, w_b=w_b, t=t
-        )
-
-        # MPC plan
-        if counter == 0:
-            mpc.set_state_with_base(
+            # Update TSID
+            tsid.set_state_with_base(
                 s=s_js[to_mj], s_dot=ds_js[to_mj], H_b=H_b, w_b=w_b, t=t
             )
-            mpc.update_references()
-            mpc_success = mpc.plan_trajectory()
-            mpc.contact_planner.advance_swing_foot_planner()
-            if not (mpc_success):
-                print("MPC failed")
+
+            # MPC plan
+            if counter == 0:
+                mpc.set_state_with_base(
+                    s=s_js[to_mj], s_dot=ds_js[to_mj], H_b=H_b, w_b=w_b, t=t
+                )
+                mpc.update_references()
+                mpc_success = mpc.plan_trajectory()
+                mpc.contact_planner.advance_swing_foot_planner()
+                if not (mpc_success):
+                    print("MPC failed")
+                    break
+
+            # Reading new references
+            com_mpc, dcom_mpc, f_lf_mpc, f_rf_mpc, ang_mom_mpc = mpc.get_references()
+            lf_sfp, rf_sfp = mpc.contact_planner.get_references_swing_foot_planner()
+
+            # f_lf_js, f_rf_js = js.get_feet_wrench()
+
+            tsid.compute_com_position()
+
+            # Update references TSID
+            tsid.update_task_references_mpc(
+                com=com_mpc,
+                dcom=dcom_mpc,
+                ddcom=np.zeros(3),
+                left_foot_desired=lf_sfp,
+                right_foot_desired=rf_sfp,
+                s_desired=np.array(s_ref),
+                wrenches_left=f_lf_mpc,
+                wrenches_right=f_rf_mpc,
+            )
+
+            # Run control
+            succeded_controller = tsid.run()
+
+            if not (succeded_controller):
+                print("Controller failed")
                 break
 
-        # Reading new references
-        com_mpc, dcom_mpc, f_lf_mpc, f_rf_mpc, ang_mom_mpc = mpc.get_references()
-        lf_sfp, rf_sfp = mpc.contact_planner.get_references_swing_foot_planner()
+            tau_tsid = tsid.get_torque()
 
-        f_lf_js, f_rf_js = js.get_feet_wrench()
+            # Step the simulator
+            js.step(n_step=n_step_tsid_js, torques=tau_tsid[to_js])
+            counter = counter + 1
 
-        tsid.compute_com_position()
+            if counter == n_step_mpc_tsid:
+                counter = 0
 
-        # Update references TSID
-        tsid.update_task_references_mpc(
-            com=com_mpc,
-            dcom=dcom_mpc,
-            ddcom=np.zeros(3),
-            left_foot_desired=lf_sfp,
-            right_foot_desired=rf_sfp,
-            s_desired=np.array(s_ref),
-            wrenches_left=f_lf_mpc,
-            wrenches_right=f_rf_mpc,
-        )
+            # Stop the simulation if the robot fell down
+            if js.data.base_position()[2] < 0.5:
+                print(f"Robot fell down at t={t:.4f}s.")
+                break
 
-        # Run control
-        succeded_controller = tsid.run()
+            # Log data
+            # TODO transform mpc contact forces to wrenches to be compared with jaxsim ones
+            t_log.append(t)
+            tau_tsid_log.append(tau_tsid)
+            s_js_log.append(s_js)
+            ds_js_log.append(ds_js)
+            W_p_CoM_js_log.append(js.get_com_position())
+            W_p_lf_js, W_p_rf_js = js.get_feet_positions()
+            W_p_lf_js_log.append(W_p_lf_js)
+            W_p_rf_js_log.append(W_p_rf_js)
+            # f_lf_js_log.append(f_lf_js)
+            # f_rf_js_log.append(f_rf_js)
+            W_p_CoM_mpc_log.append(com_mpc)
+            f_lf_mpc_log.append(f_lf_mpc)
+            f_rf_mpc_log.append(f_rf_mpc)
+            W_p_lf_sfp_log.append(lf_sfp.transform.translation())
+            W_p_rf_sfp_log.append(rf_sfp.transform.translation())
+            W_p_CoM_tsid_log.append(tsid.COM.toNumPy())
 
-        if not (succeded_controller):
-            print("Controller failed")
+        except Exception as e:
+            print(f"Exception during simulation at time{t}: {e}")
+            traceback.print_exc()
             break
-
-        tau_tsid = tsid.get_torque()
-
-        # Step the simulator
-        js.step(n_step=n_step_tsid_js, torques=tau_tsid[to_js])
-        counter = counter + 1
-
-        if counter == n_step_mpc_tsid:
-            counter = 0
-
-        # Stop the simulation if the robot fell down
-        if js.data.base_position()[2] < 0.5:
-            print(f"Robot fell down at t={t:.4f}s.")
-            break
-
-        # Log data
-        # TODO transform mpc contact forces to wrenches to be compared with jaxsim ones
-        t_log.append(t)
-        tau_tsid_log.append(tau_tsid)
-        s_js_log.append(s_js)
-        ds_js_log.append(ds_js)
-        W_p_CoM_js_log.append(js.get_com_position())
-        W_p_lf_js, W_p_rf_js = js.get_feet_positions()
-        W_p_lf_js_log.append(W_p_lf_js)
-        W_p_rf_js_log.append(W_p_rf_js)
-        f_lf_js_log.append(f_lf_js)
-        f_rf_js_log.append(f_rf_js)
-        W_p_CoM_mpc_log.append(com_mpc)
-        f_lf_mpc_log.append(f_lf_mpc)
-        f_rf_mpc_log.append(f_rf_mpc)
-        W_p_lf_sfp_log.append(lf_sfp.transform.translation())
-        W_p_rf_sfp_log.append(rf_sfp.transform.translation())
-        W_p_CoM_tsid_log.append(tsid.COM.toNumPy())
 
     logs = {
         "t": np.array(t_log),
@@ -501,10 +512,10 @@ titles = [
 for row in range(3):
     for col in range(2):
         idx = row * 2 + col
-        force_js = f_lf_js[:, col] if col == 0 else f_rf_js[:, col]
+        # force_js = f_lf_js[:, col] if col == 0 else f_rf_js[:, col]
         force_mpc = f_lf_mpc[:, col] if col == 0 else f_rf_mpc[:, col]
-        axs[row, col].plot(t, force_js, label="Simulated")
-        # axs[row, col].plot(t, force_mpc, linestyle="--", label="MPC References")
+        # axs[row, col].plot(t, force_js, label="Simulated")
+        axs[row, col].plot(t, force_mpc, linestyle="--", label="MPC References")
         axs[row, col].set_title(titles[idx])
         axs[row, col].set_ylabel("Force [N]")
         axs[row, col].set_xlabel("Time [s]")
@@ -537,7 +548,7 @@ def create_output_dir(directory: Path):
 repo_root = get_repo_root()
 
 # Define the results directory
-results_dir = repo_root / "results"
+results_dir = repo_root / "examples" / "results"
 
 # Create the results directory if it doesn't exist
 create_output_dir(results_dir)
