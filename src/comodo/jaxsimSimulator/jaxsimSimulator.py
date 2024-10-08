@@ -47,6 +47,7 @@ class JaxsimSimulator(Simulator):
         kv_motors=None,
         Im=None,
         terrain_params=None,
+        visualization_mode=None,
     ) -> None:
         logging.warning("Motor parameters are not supported in JaxsimSimulator")
         model = js.model.JaxSimModel.build_from_model_description(
@@ -115,6 +116,8 @@ class JaxsimSimulator(Simulator):
         logging.info(f"Left foot sole frame index: {self.left_footsole_frame_idx}")
         logging.info(f"Right foot sole frame index: {self.right_footsole_frame_idx}")
 
+        self.visualization_mode = visualization_mode
+
         if self.visualization_mode is not None:
             if self.visualization_mode not in ["record", "interactive"]:
                 raise ValueError(
@@ -135,13 +138,14 @@ class JaxsimSimulator(Simulator):
                 data=self.mj_model_helper.data,
                 fps=30,
             )
+            logging.warning("recorder initialized")
 
-    # def get_feet_wrench(self) -> npt.ArrayLike:
-    #     wrenches = self.get_link_contact_forces()
+    def get_feet_wrench(self) -> npt.ArrayLike:
+        wrenches = self.get_link_contact_forces()
 
-    #     left_foot = np.array(wrenches[self.left_foot_link_idx])
-    #     right_foot = np.array(wrenches[self.right_foot_link_idx])
-    #     return left_foot, right_foot
+        left_foot = np.array(wrenches[self.left_foot_link_idx])
+        right_foot = np.array(wrenches[self.right_foot_link_idx])
+        return left_foot, right_foot
 
     def set_input(self, input: npt.ArrayLike) -> None:
         self.tau = jnp.array(input)
@@ -216,8 +220,8 @@ class JaxsimSimulator(Simulator):
 
         return s, s_dot, tau
 
-    # def get_link_contact_forces(self) -> npt.ArrayLike:
-    #     return self.link_contact_forces
+    def get_link_contact_forces(self) -> npt.ArrayLike:
+        return self.link_contact_forces
 
     def total_mass(self) -> float:
         return js.model.total_mass(self.model)
