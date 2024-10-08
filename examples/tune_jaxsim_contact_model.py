@@ -28,9 +28,9 @@ os.environ["XLA_PYTHON_CLIENT_MEM_PREALLOCATE"] = "False"
 # Flag to solve MUMPS hanging
 os.environ["OMP_NUM_THREADS"] = "1"
 # XLA flags
-os.environ["XLA_FLAGS"] = (
-    "--xla_cpu_multi_thread_eigen=false intra_op_parallelism_threads=1"
-)
+# os.environ["XLA_FLAGS"] = (
+#     "--xla_cpu_multi_thread_eigen=false intra_op_parallelism_threads=1"
+# )
 
 import jax
 import jax.numpy as jnp
@@ -534,7 +534,7 @@ if __name__ == "__main__":
         study = optuna.create_study(
             direction="maximize",
             study_name="Jaxsim Contact model tuning",
-            sampler=optuna.samplers.CmaEsSampler(),
+            sampler=optuna.samplers.TPESampler(seed=42),
         )
         study.optimize(
             func=objective,
