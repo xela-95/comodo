@@ -12,13 +12,13 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from pathlib import Path
-
-import jax
-import jax.numpy as jnp
-import numpy as np
 import optuna
 from optuna.trial import TrialState
+from optuna.integration.wandb import WeightsAndBiasesCallback
+import numpy as np
 import logging
+import wandb
+
 
 # Run only on CPU
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
@@ -27,8 +27,13 @@ os.environ["XLA_PYTHON_CLIENT_MEM_PREALLOCATE"] = "False"
 # os.environ["JAX_DISABLE_JIT"] = "True"
 # Flag to solve MUMPS hanging
 os.environ["OMP_NUM_THREADS"] = "1"
+# XLA flags
+os.environ["XLA_FLAGS"] = (
+    "--xla_cpu_multi_thread_eigen=false intra_op_parallelism_threads=1"
+)
 
-
+import jax
+import jax.numpy as jnp
 from comodo.centroidalMPC.centroidalMPC import CentroidalMPC
 from comodo.centroidalMPC.mpcParameterTuning import MPCParameterTuning
 from comodo.jaxsimSimulator import JaxsimSimulator
@@ -36,6 +41,16 @@ from comodo.robotModel.createUrdf import createUrdf
 from comodo.robotModel.robotModel import RobotModel
 from comodo.TSIDController.TSIDController import TSIDController
 from comodo.TSIDController.TSIDParameterTuning import TSIDParameterTuning
+
+# wandb setup
+# wandb.require("core")
+wandb.login()
+wandbc = WeightsAndBiasesCallback(
+    wandb_kwargs=dict(
+        project="jaxsim-contact-model-tuning", config={}, entity="ami-iit"
+    ),
+    as_multirun=False,
+)
 
 # Logger setup
 logger = logging.getLogger("tune_jaxsim_contact_model")
@@ -381,7 +396,7 @@ def simulate(
 
     return obj
 
-
+@wandbc.track_in_wandb()
 def objective(trial: optuna.Trial) -> float:
     # Define the parameters to optimize and get the values for the trial
     max_penetration = trial.suggest_float("max_penetration", 1e-4, 1e-2)
@@ -390,6 +405,16 @@ def objective(trial: optuna.Trial) -> float:
     mu = trial.suggest_float("mu", 0.25, 1.5)
 
     TERRAIN_PARAMETERS = (max_penetration, damping_ratio, mu)
+
+    config_dict = dict(trial.params)
+    config_dict["trial_number"] = trial.number
+
+    # run = wandb.init(
+    #     project="jaxsim-contact-model-tuning",
+    #     config=config_dict,
+    #     entity="ami-iit",
+    #     reinit=True,
+    # )
 
     logger.info(
         f"Terrain parameters: max_penetration={max_penetration}, damping_ratio={damping_ratio}, mu={mu}"
@@ -473,8 +498,16 @@ def objective(trial: optuna.Trial) -> float:
     except Exception as e:
         logger.error(f"Exception in model.step:\n{e}")
         traceback.print_exc()
-
-    return obj
+    finally:
+        # wandb.log({"objective": obj})
+        wandb.log(
+            {
+                **config_dict,
+                "objective": obj,
+            }
+        )
+        # wandb.finish(quiet=True)
+        return obj
 
 
 if __name__ == "__main__":
@@ -486,34 +519,50 @@ if __name__ == "__main__":
     parser.add_argument("--trials", type=int, default=10)
     args = parser.parse_args()
 
+    # run = wandb.init(
+    #     project="jaxsim-contact-model-tuning",
+    #     config={},
+    #     entity="ami-iit",
+    # )
+
     global js, s_0, xyz_rpy_0, H_b_0, robot_model_init, js_joint_names, to_mj, to_js, T
 
     js, s_0, xyz_rpy_0, H_b_0, robot_model_init, js_joint_names, to_mj, to_js = init()
-    T = 1.0
+    T = 10.0
 
-    study = optuna.create_study(
-        direction="maximize",
-        study_name="Jaxsim Contact model tuning",
-        sampler=optuna.samplers.CmaEsSampler(),
-    )
-    study.optimize(
-        func=objective, n_trials=args.trials, show_progress_bar=True, n_jobs=args.jobs
-    )
+    try:
+        study = optuna.create_study(
+            direction="maximize",
+            study_name="Jaxsim Contact model tuning",
+            sampler=optuna.samplers.CmaEsSampler(),
+        )
+        study.optimize(
+            func=objective,
+            n_trials=args.trials,
+            show_progress_bar=True,
+            n_jobs=args.jobs,
+            callbacks=[wandbc],
+        )
+    except Exception as e:
+        logger.error(f"Exception in study.optimize:\n{e}")
+        traceback.print_exc()
+    finally:
+        pruned_trials = study.get_trials(deepcopy=False, states=[TrialState.PRUNED])
+        complete_trials = study.get_trials(deepcopy=False, states=[TrialState.COMPLETE])
 
-    pruned_trials = study.get_trials(deepcopy=False, states=[TrialState.PRUNED])
-    complete_trials = study.get_trials(deepcopy=False, states=[TrialState.COMPLETE])
+        logger.info("Study statistics: ")
+        logger.info(f"  Number of finished trials: {len(study.trials)}")
+        logger.info(f"  Number of pruned trials: {len(pruned_trials)}")
+        logger.info(f"  Number of complete trials: {len(complete_trials)}")
 
-    logger.info("Study statistics: ")
-    logger.info(f"  Number of finished trials: {len(study.trials)}")
-    logger.info(f"  Number of pruned trials: {len(pruned_trials)}")
-    logger.info(f"  Number of complete trials: {len(complete_trials)}")
+        logger.info("Best trial:")
+        trial = study.best_trial
+        logger.info(f"  Value: {trial.value}")
+        wandb.run.summary["best_trial_value"] = trial.value
 
-    logger.info("Best trial:")
-    trial = study.best_trial
-    logger.info(f"  Value: {trial.value}")
+        logger.info("  Params: ")
+        for key, value in trial.params.items():
+            logger.info(f"    {key}: {value}")
+            wandb.run.summary["best_trial_" + key] = value
 
-    logger.info("  Params: ")
-    for key, value in trial.params.items():
-        logger.info(f"    {key}: {value}")
-
-    plot_study(study=study)
+        plot_study(study=study)
