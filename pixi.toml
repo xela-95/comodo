@@ -37,10 +37,12 @@ casadi = "<=3.6.6"
 nbformat = ">=5.10.4,<6"
 python-kaleido = ">=0.2.1,<0.3"
 scikit-learn = ">=1.5.2,<2"
+wandb = ">=0.17.3,<0.18"
 # jaxsim = ">=0.4.2"
 
 [pypi-dependencies]
 # jaxsim = { git = "https://github.com/ami-iit/jaxsim.git", rev="visco_elastic_contacts", extras = ["all"]}
-jaxsim = { path = "../jaxsim", extras = ["all"] }
+jaxsim = { path = "../jaxsim", extras = ["all"], editable = true }
 urdfmodifiers = { git = "https://github.com/CarlottaSartore/urdf-modifiers.git", rev = "scalar_modification" }
 comodo = { path = "./", editable = true }
+optuna-integration = { version = ">=4.0.0, <5", extras = ["wandb"] }
