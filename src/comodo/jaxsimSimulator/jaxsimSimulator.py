@@ -67,9 +67,6 @@ class JaxsimSimulator(Simulator):
         # Integrator (not used for visco-elastic contacts)
         self._integrator: integrators.common.Integrator | None = None
 
-        # Integrator state for the simulation (not used for visco-elastic contacts)
-        self._integrator_state: dict[str, Any] | None = None
-
         # Time step for the simulation
         self._dt: float = dt
 
@@ -229,7 +226,6 @@ class JaxsimSimulator(Simulator):
         )
 
         self.integrator = None
-        self.integrator_state = None
 
         if self._contact_model_type is not JaxsimContactModelEnum.VISCO_ELASTIC:
 
@@ -239,10 +235,6 @@ class JaxsimSimulator(Simulator):
                     data=self._data,
                     system_dynamics=js.ode.system_dynamics,
                 )
-            )
-
-            self._integrator_state = self._integrator.init(
-                x0=self._data.state, t0=0, dt=self._model.time_step
             )
 
         # Initialize tau to zero
@@ -335,13 +327,13 @@ class JaxsimSimulator(Simulator):
             else:
 
                 # All other contact models
-                self._data, self._integrator_state = js.model.step(
+                self._data, _ = js.model.step(
                     model=self._model,
                     data=self._data,
                     integrator=self._integrator,
-                    integrator_state=self._integrator_state,
                     link_forces=None,
                     joint_force_references=self._tau,
+                    dt=self._dt,
                 )
 
             if not dry_run:
